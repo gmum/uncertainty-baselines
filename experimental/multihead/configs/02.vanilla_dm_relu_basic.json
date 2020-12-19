@@ -21,9 +21,9 @@
     
     "activation": "relu",
     "certainty_variant": "partial",
-    "model_variant": "1vsall",
-    "logit_variant": "affine",
-
+    "model_variant": "vanilla",
+    "logit_variant": "dm",
+    
     "epochs": 250,    
     "batch_size": 128,
     "eval_batch_size": 100,

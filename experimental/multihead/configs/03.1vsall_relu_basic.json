@@ -17,7 +17,7 @@
 
     "use_early_stopping": true,
     "save_checkpoints": true,
-    "use_tensorboard": false,
+    "use_tensorboard": false, 
     
     "activation": "relu",
     "certainty_variant": "partial",

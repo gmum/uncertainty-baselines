@@ -17,13 +17,13 @@
 
     "use_early_stopping": true,
     "save_checkpoints": true,
-    "use_tensorboard": false,
+    "use_tensorboard": false,    
     
     "activation": "relu",
     "certainty_variant": "partial",
-    "model_variant": "1vsall",
+    "model_variant": "vanilla",
     "logit_variant": "affine",
-
+    
     "epochs": 250,    
     "batch_size": 128,
     "eval_batch_size": 100,

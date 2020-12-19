@@ -16,13 +16,13 @@
     "augment_train": true,
 
     "use_early_stopping": true,
-    "save_checkpoints": true,
+    "save_checkpoints": false,
     "use_tensorboard": false,
     
     "activation": "relu",
     "certainty_variant": "partial",
     "model_variant": "1vsall",
-    "logit_variant": "affine",
+    "logit_variant": "dm",
 
     "epochs": 250,    
     "batch_size": 128,
@@ -31,9 +31,9 @@
     
     "num_bins": 15,
 
-    "tune_hyperparams": false,    
+    "tune_hyperparams": true,    
     "tuner_dir": "tune_dir",
-    "tuner_subdir": "subdir1",
+    "tuner_subdir": "UDL2020-paper-040-by-acc-earlystop",
     "tune_by": "acc",
     "tune_num_trials": 100,
     "tune_batch_size": 512,

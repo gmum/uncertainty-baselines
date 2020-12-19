@@ -68,6 +68,7 @@ def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True):
     return one_vs_all_loss
 
 
+
 def _activ(activation_type: str = 'relu'):
     activation = {'relu': tf.keras.layers.ReLU(), 'sin': tf.keras.backend.sin}
     if activation_type in activation.keys():
@@ -213,15 +214,26 @@ class resnet20(tf.keras.Model):
 #         self.model_variant = params['model_variant'] if 'model_variant' in params.keys() else '1vsall'
         self.batch_size = batch_size
         self.l2_weight = l2_weight
-        self.activation_type = activation_type
+        
+        if activation_type in ['sin','relu']:
+            self.activation_type = activation_type
+        else:
+            raise ValueError(f'unknown activation_type={activation_type}')
         
         if certainty_variant in ['partial','total','normalized']:
             self.certainty_variant = certainty_variant
         else:
-            raise ValueError('unknown certainty_variant')
-            
-        self.model_variant = model_variant
-        self.logit_variant = logit_variant
+            raise ValueError(f'unknown certainty_variant={certainty_variant}')
+        
+        if model_variant in ['1vsall','vanilla']:
+            self.model_variant = model_variant
+        else:
+            raise ValueError(f'unknown model_variant={model_variant}')
+                        
+        if logit_variant in ['affine','dm']:
+            self.logit_variant = logit_variant
+        else:
+            raise ValueError(f'unknown logit_variant={logit_variant}')
         
         self.depth = 20
         self.num_res_blocks = int((self.depth - 2) / 6)
@@ -254,7 +266,7 @@ class resnet20(tf.keras.Model):
         elif self.logit_variant == 'affine':
             self.layer_final_3 = tf.keras.layers.Dense(10, kernel_initializer='he_normal')
         else:
-            raise ValueError('unknown logit_variant')   
+            raise ValueError(f'unknown logit_variant={self.logit_variant}')   
 
     def _calc_certs(self,
                     probs: tf.Tensor,
@@ -291,7 +303,7 @@ class resnet20(tf.keras.Model):
             certs = tf.math.divide(certs,certs_norm)
             
         else:
-            raise ValueError('unknown certainty_variant')   
+            raise ValueError(f'unknown certainty_variant={certainty_variant}')   
             
         return certs
     
@@ -333,7 +345,7 @@ class resnet20(tf.keras.Model):
         elif self.model_variant == 'vanilla':
             probs = tf.math.softmax(logits,axis=-1)
         else:
-            raise ValueError('unknown model_variant')
+            raise ValueError(f'unknown model_variant={self.model_variant}')
         
         certs = self._calc_certs(probs, certainty_variant = self.certainty_variant)
         logits_from_certs = self._calc_logits_from_certs(certs = certs)
@@ -395,8 +407,76 @@ def save_model(model,
     if verbose: logging.info('Saving model to '+model_dir)
     model.save_weights(model_dir)
 
+# def configure_model(FLAGS):
+#     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS.output_dir,'logs'))
+#     #filepath= os.path.join(FLAGS.output_dir,"weights-improvement-{epoch:03d}-{val_accuracy:.2f}.hdf5")
+#     filepath = FLAGS.model_file
+#     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath, 
+#                                                                  monitor='val_probs_acc', 
+#                                                                  verbose=1,
+#                                                                  save_best_only=True,
+#                                                                  save_weights_only=True,
+#                                                                  mode='max')
+
+#     callbacks = [checkpoint_callback]
+#     #callbacks = [tensorboard_callback]
+    
+#     boundaries = [32000, 48000]
+#     values = [0.1, 0.01, 0.001]
+#     scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
+#     if FLAGS.optimizer == 'sgd':
+#         optimizer = tf.keras.optimizers.SGD(learning_rate=scheduler,momentum=0.9)
+#     elif FLAGS.optimizer == 'adam':
+#         optimizer = tf.keras.optimizers.Adam(learning_rate=scheduler,momentum=0.9)
+#     else:
+#         raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
+
+#     def get_lr_metric(optimizer):
+#         def lr(y_true, y_pred):
+#             return optimizer._decayed_lr(tf.float32)
+#         return lr
+
+#     lr_metric = get_lr_metric(optimizer)
+
+#     metrics_basic = {}
+#     metrics_basic['logits'] = []
+#     metrics_basic['probs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
+#                               um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
+#                               #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
+#                               nll(name='nll'),
+#                               BrierScore(name='brier')]
+#     metrics_basic['certs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
+#                               um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
+#                               #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
+#                               nll(name='nll'),
+#                               BrierScore(name='brier')]
+#     metrics_basic['logits_from_certs'] = []    
+
+    
+#     if FLAGS.model_variant=='1vsall':
+#         loss_funcs = {'logits':one_vs_all_loss_fn(from_logits=True),
+#                   'probs':None,
+#                   'certs':None,
+#                   'logits_from_certs':None}
+        
+#         metrics = metrics_basic
+          
+#     elif FLAGS.model_variant=='vanilla':        
+#         loss_funcs = {'logits':tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+#                       'probs':None,
+#                       'certs':None,
+#                       'logits_from_certs':None}
+
+#         metrics = metrics_basic
+        
+#     else:
+#         raise ValueError(f'unknown model_variant={FLAGS.model_variant}')
+        
+#     return callbacks, optimizer, loss_funcs, metrics    
 def configure_model(FLAGS):
+    callbacks = []
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS.output_dir,'logs'))
+    
     #filepath= os.path.join(FLAGS.output_dir,"weights-improvement-{epoch:03d}-{val_accuracy:.2f}.hdf5")
     filepath = FLAGS.model_file
     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath, 
@@ -406,15 +486,77 @@ def configure_model(FLAGS):
                                                                  save_weights_only=True,
                                                                  mode='max')
 
-    callbacks = [checkpoint_callback]
-    #callbacks = [tensorboard_callback]
+    earlystop_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=50)
     
-    boundaries = [32000, 48000]
-    values = [0.1, 0.01, 0.001]
-    scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
+    if FLAGS.save_checkpoints:
+        callbacks+=[checkpoint_callback]
+    if FLAGS.use_early_stopping:
+        callbacks+=[earlystop_callback]
+    if FLAGS.use_tensorboard:
+        callbacks+=[tensorboard_callback]
 
-    optimizer = tf.keras.optimizers.SGD(learning_rate=scheduler,
-                                        momentum=0.9)
+    def pick_scheduler(lr):
+
+        if FLAGS.lr_scheduler == 'piecewise_linear':
+            boundaries = [32000, 48000]
+            values = [lr, lr/10, lr/100]
+            lr_scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
+        elif FLAGS.lr_scheduler == 'const':
+            lr_scheduler = lr
+        else:
+            raise ValueError(f'unknown lr_scheduler={FLAGS.lr_scheduler}')
+            
+        return lr_scheduler
+    
+    def hp_params(hp):
+        lr = hp.Float('learning_rate',min_value=1e-3,max_value=1) #extracted from UDL2020-paper-040.pdf
+        eps = hp.Float('epsilon',min_value=1e-8,max_value=1e-5)
+        b1 = hp.Float('beta_1',min_value=0.85,max_value=0.99)
+        
+        return lr,eps,b1
+    
+    if FLAGS.tune_hyperparams:
+        momentum = FLAGS.momentum
+        
+        if FLAGS.optimizer == 'sgd':
+            def optimizer_sgd_func(hp):
+                lr,_,_ = hp_params(hp)
+                return tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
+                                           momentum=momentum)
+            optimizer = optimizer_sgd_func
+            
+        elif FLAGS.optimizer == 'adam':
+            def optimizer_adam_func(hp):
+                lr,eps,b1 = hp_params(hp)           
+                return tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
+                                             epsilon=eps,
+                                             beta_1=b1) 
+            optimizer = optimizer_adam_func
+        else:
+            raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
+    else:
+        lr = FLAGS.learning_rate
+        eps = FLAGS.epsilon
+        b1 = FLAGS.beta_1
+        momentum = FLAGS.momentum
+        
+        if FLAGS.optimizer == 'sgd':
+            optimizer = tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
+                                                momentum=momentum) 
+        elif FLAGS.optimizer == 'adam':
+            optimizer = tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
+                                                 epsilon=eps,
+                                                 beta_1=b1)    
+        else:
+            raise ValueError(f'unknown optimizer={FLAGS.optimizer}')        
+
+         
+    if FLAGS.optimizer == 'sgd':
+        optimizer = optimizer_sgd_func if FLAGS.tune_hyperparams else optimizer_sgd
+    elif FLAGS.optimizer == 'adam':
+        optimizer = optimizer_adam_func if FLAGS.tune_hyperparams else optimizer_adam
+    else:
+        raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
 
     def get_lr_metric(optimizer):
         def lr(y_true, y_pred):
@@ -455,9 +597,9 @@ def configure_model(FLAGS):
         metrics = metrics_basic
         
     else:
-        raise ValueError('unknown model_variant')
+        raise ValueError(f'unknown model_variant={FLAGS.model_variant}')
         
-    return callbacks, optimizer, loss_funcs, metrics    
+    return callbacks, optimizer, loss_funcs, metrics
 
     
 # based on um.numpy.plot_diagram, um.numpy.reliability_diagram
@@ -509,7 +651,7 @@ def calibrate_model_nonlin(model,
                     verbose=False,
                      bins=4000,
                      basis_type='uniform', # or list
-                     basis_params={-10,10,100},
+                     basis_params={-10,10,10},
                      basis_list = [-2,-1,0,1,2]
                     ): 
     

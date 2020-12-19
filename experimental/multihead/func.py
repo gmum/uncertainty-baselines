@@ -131,15 +131,20 @@ def load_datasets_corrupted(FLAGS):
 # load cifar100 and svhn datasets
 def load_datasets_OOD(FLAGS):
     ood_datasets = {}
+    ood_builders = {}
     strategy = ub.strategy_utils.get_strategy(None, False)
+    
     dataset_builder = ub.datasets.SvhnDataset(batch_size=FLAGS.batch_size,eval_batch_size=FLAGS.eval_batch_size)
     train_dset = ub.utils.build_dataset(dataset_builder,strategy,'train',as_tuple=True)
     ood_datasets['svhn'] = train_dset
+    ood_builders['svhn'] = dataset_builder
+    
     dataset_builder = ub.datasets.Cifar100Dataset(batch_size=FLAGS.batch_size,eval_batch_size=FLAGS.eval_batch_size)
     train_dset = ub.utils.build_dataset(dataset_builder,strategy,'train',as_tuple=True)
     ood_datasets['cifar100'] = train_dset
-
-    return ood_datasets
+    ood_builders['cifar100'] = dataset_builder
+    
+    return ood_datasets, ood_builders
 
 
 
@@ -158,10 +163,16 @@ def save_flags(path,FLAGS):
         
 def load_flags(path):
     assert os.path.exists(path), f'file {path} does not exist'
+    with open('FLAGS.json','r') as fp:
+        FLAGS_default = json.load(fp)
+        
     with open(path,'r') as fp:
         FLAGS = json.load(fp)
         
-    return AttrDict(FLAGS)
+    for name,val in FLAGS_default.items():
+        if name in FLAGS.keys():
+            FLAGS_default[name] = FLAGS[name]
+    return AttrDict(FLAGS_default)
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):

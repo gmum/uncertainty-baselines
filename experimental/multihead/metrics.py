@@ -119,4 +119,107 @@ class nll(tf.keras.metrics.Metric):
         #tf.print('calling reset_states')
         self.nll.assign(0)
         self.n.assign(0)
+
         
+class acc_th(tf.keras.metrics.Metric):
+    def __init__(self, th=0.0,name=None,dtype=None):
+        super(acc_th, self).__init__(name,dtype)
+        self.n_corr = self.add_weight(name='n_corr',initializer=tf.zeros_initializer,dtype=tf.int32)
+        self.n_total = self.add_weight(name='n_total', initializer=tf.zeros_initializer,dtype=tf.int32)
+        self.th = self.add_weight(name='th', initializer=tf.zeros_initializer,dtype=tf.float32)
+        self.th.assign(th)
+        
+    def update_state(self, y_true, y_pred, **kwargs):
+    
+        y_true = tf.cast(y_true,dtype=tf.int32)
+        y_true = tf.squeeze(y_true)
+        y_pred0 = tf.cast(y_pred,dtype=tf.float32)
+
+        mask = tf.reduce_max(y_pred0,axis=-1)>=self.th
+        y_pred_mask = y_pred0[mask]
+        y_true_mask = y_true[mask]
+        y_pred_max = tf.argmax(y_pred_mask,axis=-1)
+        y_pred_max = tf.cast(y_pred_max,dtype=tf.int32)
+        
+        equals = tf.equal(y_true_mask,y_pred_max)
+                
+        self.n_corr.assign_add(tf.reduce_sum(tf.cast(equals,dtype=tf.int32)))
+        self.n_total.assign_add(tf.shape(y_pred_mask)[0])
+
+    def result(self):
+        #tf.print('calling result')
+        return tf.cast(self.n_corr,dtype=tf.float32)/tf.cast(self.n_total,dtype=tf.float32)
+
+    def reset_states(self):
+        #tf.print('calling reset_states')
+        self.n_corr.assign(0)
+        self.n_total.assign(0)
+
+class acc_ntotal_th(tf.keras.metrics.Metric):
+    def __init__(self, th=0.0,name=None,dtype=None):
+        super(acc_ntotal_th, self).__init__(name,dtype)
+        self.n_total = self.add_weight(name='n_total', initializer=tf.zeros_initializer,dtype=tf.int32)
+        self.th = self.add_weight(name='th', initializer=tf.zeros_initializer,dtype=tf.float32)
+        self.th.assign(th)
+        
+    def update_state(self, y_true, y_pred, **kwargs):
+    
+#         y_true = tf.cast(y_true,dtype=tf.int32)
+#         y_true = tf.squeeze(y_true)
+        y_pred0 = tf.cast(y_pred,dtype=tf.float32)
+        mask = tf.reduce_max(y_pred0,axis=-1)>=self.th
+        y_pred_mask = y_pred0[mask]
+#         y_true_mask = y_true[mask]
+#         y_pred_max = tf.argmax(y_pred_mask,axis=-1)
+#         y_pred_max = tf.cast(y_pred_max,dtype=tf.int32)
+        
+#         equals = tf.equal(y_true_mask,y_pred_max)
+                
+#         self.n_corr.assign_add(tf.reduce_sum(tf.cast(equals,dtype=tf.int32)))
+        self.n_total.assign_add(tf.shape(y_pred_mask)[0])
+
+    def result(self):
+        #tf.print('calling result')
+        return tf.cast(self.n_total,dtype=tf.float32)
+
+    def reset_states(self):
+        #tf.print('calling reset_states')
+        self.n_total.assign(0)
+
+        
+
+def _calc_entropy(probs: tf.Tensor):
+    
+    eps=tf.keras.backend.epsilon()
+    probs = tf.cast(probs,dtype=tf.float32)
+    probs = tf.clip_by_value(probs,eps,1-eps)
+    logs = tf.math.log(probs)
+    result = -tf.reduce_sum(tf.math.multiply(probs, logs),axis=-1)
+    
+    return result        
+        
+class mean_entropy(tf.keras.metrics.Metric):
+    def __init__(self, name=None,dtype=None):
+        super(mean_entropy, self).__init__(name,dtype)
+        self.entropy = self.add_weight(name='entropy',initializer=tf.zeros_initializer,dtype=tf.float32)
+        self.n = self.add_weight(name='n', initializer=tf.zeros_initializer,dtype=tf.int32)
+        
+    def update_state(self, y_true, y_pred, **kwargs):
+        sum1 = _calc_entropy(y_pred)
+        entropy_sum = tf.reduce_sum(sum1)
+        
+        self.entropy.assign_add(entropy_sum)
+        self.n.assign_add(tf.shape(y_pred)[0])
+
+    def result(self):
+        #tf.print('calling result')
+        return self.entropy/tf.cast(self.n,dtype=tf.float32)
+
+    def reset_states(self):
+        #tf.print('calling reset_states')
+        self.entropy.assign(0)
+        self.n.assign(0)
+        
+
+
+

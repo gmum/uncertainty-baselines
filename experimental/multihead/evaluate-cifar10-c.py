@@ -1,4 +1,5 @@
 import os
+import argparse
 
 from absl import app
 from absl import flags
@@ -163,6 +164,12 @@ def set_models(certainty_variant='partial'):
     models[FLAGS.output_dir] = prepare(FLAGS)
     
     return FLAGS, models
+
+parser = argparse.ArgumentParser(description='Multihead CIFAR-10 ResNet-20 evaluate corrupted')
+parser.add_argument("--config", type=str, help="config json file",default='FLAGS.json')
+args = parser.parse_args()
+
+FLAGS = load_flags(args.config)
 
 #main loop
 # cvs = ['total','normalized']

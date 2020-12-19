@@ -1,4 +1,5 @@
 import os.path
+import argparse
 
 from absl import app
 from absl import flags
@@ -20,21 +21,34 @@ from resnet20 import configure_model as resnet20_configure
 from func import load_datasets_basic, load_datasets_corrupted, add_dataset_flags
 from func import AttrDict, load_flags, save_flags
 
+parser = argparse.ArgumentParser(description='Multihead CIFAR-10 ResNet-20 train')
+parser.add_argument("--config", type=str, help="config json file",default='FLAGS.json')
+args = parser.parse_args()
 
-FLAGS = load_flags('FLAGS.json')
+FLAGS = load_flags(args.config)
 
-FLAGS.output_dir = '3_1_1vsall_dm_relu'
-FLAGS.model_file = '3_1_1vsall_dm_relu/model.ckpt-250'
+# FLAGS = load_flags('FLAGS.json')
 
-FLAGS.activation = 'relu'
-FLAGS.certainty_variant = 'partial'
-FLAGS.model_variant = '1vsall'
-FLAGS.logit_variant = 'dm'
+# FLAGS.output_dir = '6_1vsall_dm_relu'
+# FLAGS.model_file = '6_1vsall_dm_relu/model.ckpt-250'
 
-FLAGS.eval_frequency = 10
-FLAGS.epochs= 300
+# FLAGS.activation = 'relu'
+# FLAGS.certainty_variant = 'partial'
+# FLAGS.model_variant = '1vsall'
+# FLAGS.logit_variant = 'dm'
 
-logging.info('Multihead CIFAR-10 ResNet-20 train')
+# FLAGS.optimizer = 'adam'
+# #FLAGS.learning_rate = 0.007873292527100879
+# FLAGS.learning_rate = 0.07873292527100879
+# FLAGS.epsilon = 4.84876744617341e-06
+# FLAGS.beta_1 = 0.9508128286669215
+
+# FLAGS.lr_scheduler = 'piecewise_linear'
+# FLAGS.tune_hyperparams = False
+# FLAGS.batch_size = 128
+# FLAGS.eval_frequency = 10
+# FLAGS.epochs= 250
+
 
 tf.random.set_seed(FLAGS.seed)
 np.random.seed(FLAGS.seed)

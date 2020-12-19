@@ -1,4 +1,5 @@
 import os
+import argparse
 
 from absl import app
 from absl import flags
@@ -48,16 +49,20 @@ def prepare(FLAGS):
     
     return model
 
+parser = argparse.ArgumentParser(description='Multihead CIFAR-10 ResNet-20 evaluate')
+parser.add_argument("--config", type=str, help="config json file",default='FLAGS.json')
+args = parser.parse_args()
 
-FLAGS = load_flags('FLAGS.json')
+FLAGS = load_flags(args.config)
+# FLAGS = load_flags('FLAGS.json')
 
-FLAGS.output_dir = '1_vanilla_relu'
-FLAGS.model_file = '1_vanilla_relu/model.ckpt-250'
+# FLAGS.output_dir = '1_vanilla_relu'
+# FLAGS.model_file = '1_vanilla_relu/model.ckpt-250'
 
-FLAGS.activation = 'relu'
-FLAGS.certainty_variant = 'partial'
-FLAGS.model_variant = 'vanilla'
-FLAGS.logit_variant = 'affine'
+# FLAGS.activation = 'relu'
+# FLAGS.certainty_variant = 'partial'
+# FLAGS.model_variant = 'vanilla'
+# FLAGS.logit_variant = 'affine'
 
 model = prepare(FLAGS)
 
