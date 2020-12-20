@@ -551,12 +551,12 @@ def configure_model(FLAGS):
             raise ValueError(f'unknown optimizer={FLAGS.optimizer}')        
 
          
-    if FLAGS.optimizer == 'sgd':
-        optimizer = optimizer_sgd_func if FLAGS.tune_hyperparams else optimizer_sgd
-    elif FLAGS.optimizer == 'adam':
-        optimizer = optimizer_adam_func if FLAGS.tune_hyperparams else optimizer_adam
-    else:
-        raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
+#     if FLAGS.optimizer == 'sgd':
+#         optimizer = optimizer_sgd_func if FLAGS.tune_hyperparams else optimizer_sgd
+#     elif FLAGS.optimizer == 'adam':
+#         optimizer = optimizer_adam_func if FLAGS.tune_hyperparams else optimizer_adam
+#     else:
+#         raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
 
     def get_lr_metric(optimizer):
         def lr(y_true, y_pred):

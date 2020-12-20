@@ -77,7 +77,7 @@ def prepare(FLAGS):
 if FLAGS.tune_by == 'acc':
     objective = kerastuner.Objective("val_probs_acc", direction="max")
 elif FLAGS.tune_by == 'ece':
-    objective = objective=kerastuner.Objective("val_probs_ece", direction="min")
+    objective = kerastuner.Objective("val_probs_ece", direction="min")
 else:
     raise ValueError(f'unknown tune_by={FLAGS.tune_by}')
     
