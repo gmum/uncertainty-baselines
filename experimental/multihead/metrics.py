@@ -11,7 +11,7 @@ import tensorflow as tf
 import uncertainty_baselines as ub
 import uncertainty_metrics as um
 
-import utils #from baselines/cifar
+import dataset_utils #from baselines/cifar
 
 def rel_diag(model,
              dataset,
@@ -59,6 +59,11 @@ class BrierScore(tf.keras.metrics.Mean):
         super(BrierScore,self).__init__(*args,**kwargs)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
+        if type(y_true)==np.ndarray:
+            y_true = tf.constant(y_true)
+        if type(y_pred)==np.ndarray:
+            y_pred = tf.constant(y_pred)
+            
         sh = tf.shape(y_true)
         if len(sh)>1:
           y_true = tf.reshape(y_true,sh[:1])

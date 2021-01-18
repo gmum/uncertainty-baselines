@@ -13,7 +13,7 @@ import tensorflow_datasets as tfds
 import json
 import os.path
 
-import utils #from baselines/cifar
+import dataset_utils #from baselines/cifar
 
 
 def augment_dataset(FLAGS,dataset):
@@ -106,19 +106,19 @@ def load_datasets_basic(FLAGS):
     return dataset_builder,train_dataset,val_dataset,test_dataset
 
 def load_datasets_corrupted(FLAGS):
-    train_dataset = utils.load_input_fn(split=tfds.Split.TRAIN,
+    train_dataset = dataset_utils.load_input_fn(split=tfds.Split.TRAIN,
                                          name=FLAGS.dataset,
                                          batch_size=FLAGS.batch_size,
                                          use_bfloat16=False)()
-    test_datasets = {'clean': utils.load_input_fn(split=tfds.Split.TEST,
+    test_datasets = {'clean': dataset_utils.load_input_fn(split=tfds.Split.TEST,
                                                   name=FLAGS.dataset,
                                                   batch_size=FLAGS.batch_size,
                                                   use_bfloat16=False)()
                     }
     
     #load corrupted/modified cifar10 datasets
-    load_c_input_fn = utils.load_cifar10_c_input_fn
-    corruption_types, max_intensity = utils.load_corrupted_test_info(FLAGS.dataset)
+    load_c_input_fn = dataset_utils.load_cifar10_c_input_fn
+    corruption_types, max_intensity = dataset_utils.load_corrupted_test_info(FLAGS.dataset)
     for corruption in corruption_types:
         for intensity in range(1, max_intensity + 1):
             input_fn = load_c_input_fn(corruption_name=corruption,
@@ -258,19 +258,19 @@ def _load_datasets_basic(FLAGS):
     return dataset_builder,train_dataset,val_dataset,test_dataset
 
 def _load_datasets_corrupted(FLAGS):
-    train_dataset = utils.load_input_fn(split=tfds.Split.TRAIN,
+    train_dataset = dataset_utils.load_input_fn(split=tfds.Split.TRAIN,
                                          name=FLAGS['dataset'],
                                          batch_size=FLAGS['train_params']['batch_size'],
                                          use_bfloat16=False)()
-    test_datasets = {'clean': utils.load_input_fn(split=tfds.Split.TEST,
+    test_datasets = {'clean': dataset_utils.load_input_fn(split=tfds.Split.TEST,
                                                   name=FLAGS['dataset'],
                                                   batch_size=FLAGS['train_params']['batch_size'],
                                                   use_bfloat16=False)()
                     }
     
     #load corrupted/modified cifar10 datasets
-    load_c_input_fn = utils.load_cifar10_c_input_fn
-    corruption_types, max_intensity = utils.load_corrupted_test_info(FLAGS.dataset)
+    load_c_input_fn = dataset_utils.load_cifar10_c_input_fn
+    corruption_types, max_intensity = dataset_utils.load_corrupted_test_info(FLAGS.dataset)
     for corruption in corruption_types:
         for intensity in range(1, max_intensity + 1):
             input_fn = load_c_input_fn(corruption_name=corruption,

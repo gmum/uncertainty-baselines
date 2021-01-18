@@ -341,7 +341,7 @@ class resnet20(tf.keras.Model):
         if self.model_variant == '1vsall':
             probs = tf.math.sigmoid(logits)
             if self.logit_variant == 'dm':
-               probs = 2*probs
+                probs = 2*probs
         elif self.model_variant == 'vanilla':
             probs = tf.math.softmax(logits,axis=-1)
         else:
@@ -407,72 +407,6 @@ def save_model(model,
     if verbose: logging.info('Saving model to '+model_dir)
     model.save_weights(model_dir)
 
-# def configure_model(FLAGS):
-#     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS.output_dir,'logs'))
-#     #filepath= os.path.join(FLAGS.output_dir,"weights-improvement-{epoch:03d}-{val_accuracy:.2f}.hdf5")
-#     filepath = FLAGS.model_file
-#     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath, 
-#                                                                  monitor='val_probs_acc', 
-#                                                                  verbose=1,
-#                                                                  save_best_only=True,
-#                                                                  save_weights_only=True,
-#                                                                  mode='max')
-
-#     callbacks = [checkpoint_callback]
-#     #callbacks = [tensorboard_callback]
-    
-#     boundaries = [32000, 48000]
-#     values = [0.1, 0.01, 0.001]
-#     scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
-#     if FLAGS.optimizer == 'sgd':
-#         optimizer = tf.keras.optimizers.SGD(learning_rate=scheduler,momentum=0.9)
-#     elif FLAGS.optimizer == 'adam':
-#         optimizer = tf.keras.optimizers.Adam(learning_rate=scheduler,momentum=0.9)
-#     else:
-#         raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
-
-#     def get_lr_metric(optimizer):
-#         def lr(y_true, y_pred):
-#             return optimizer._decayed_lr(tf.float32)
-#         return lr
-
-#     lr_metric = get_lr_metric(optimizer)
-
-#     metrics_basic = {}
-#     metrics_basic['logits'] = []
-#     metrics_basic['probs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
-#                               um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
-#                               #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
-#                               nll(name='nll'),
-#                               BrierScore(name='brier')]
-#     metrics_basic['certs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
-#                               um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
-#                               #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
-#                               nll(name='nll'),
-#                               BrierScore(name='brier')]
-#     metrics_basic['logits_from_certs'] = []    
-
-    
-#     if FLAGS.model_variant=='1vsall':
-#         loss_funcs = {'logits':one_vs_all_loss_fn(from_logits=True),
-#                   'probs':None,
-#                   'certs':None,
-#                   'logits_from_certs':None}
-        
-#         metrics = metrics_basic
-          
-#     elif FLAGS.model_variant=='vanilla':        
-#         loss_funcs = {'logits':tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-#                       'probs':None,
-#                       'certs':None,
-#                       'logits_from_certs':None}
-
-#         metrics = metrics_basic
-        
-#     else:
-#         raise ValueError(f'unknown model_variant={FLAGS.model_variant}')
-        
-#     return callbacks, optimizer, loss_funcs, metrics    
 def configure_model(FLAGS):
     callbacks = []
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS.output_dir,'logs'))
@@ -643,6 +577,8 @@ def _extract_conf_acc(probs,labels,bins=0):
     
 # nonlinear calibration
 
+
+
 def calibrate_model_nonlin(model,
                     dataset,
                     FLAGS,
@@ -651,7 +587,7 @@ def calibrate_model_nonlin(model,
                     verbose=False,
                      bins=4000,
                      basis_type='uniform', # or list
-                     basis_params={-10,10,10},
+                     basis_params={-20,20,60},
                      basis_list = [-2,-1,0,1,2]
                     ): 
     
@@ -707,13 +643,13 @@ def calibrate_model_nonlin(model,
                                   weight_decay=None)    
     
     #number of classes
-    K = FLAGS.no_classes
+    K = FLAGS['no_classes']
     
     labels = np.empty(0)
     probs = np.empty((0,K))
     
     for i,(x,y) in enumerate(dataset):
-        if i>FLAGS.validation_steps: break
+        if i>FLAGS['validation_steps']: break
 
         out = model(x)[output].numpy()
         labels = np.append(labels,y.numpy().astype('int32'))
