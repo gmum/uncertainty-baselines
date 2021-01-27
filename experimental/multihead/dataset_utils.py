@@ -108,46 +108,67 @@ def load_cifar10_c_input_fn(corruption_name,
 
 
 # TODO(ghassen,trandustin): Push this metadata upstream to TFDS.
-def load_corrupted_test_info(dataset):
+def load_corrupted_test_info(corruptions_variant):
   """Loads information for CIFAR-10-C."""
-  if dataset == 'cifar10':
-    corruption_types = [
-        'gaussian_noise',
-        'shot_noise',
-        'impulse_noise',
-        'defocus_blur',
-        'frosted_glass_blur',
-        'motion_blur',
-        'zoom_blur',
-        'snow',
-        'frost',
-        'fog',
-        'brightness',
-        'contrast',
-        'elastic',
-        'pixelate',
-        'jpeg_compression',
-    ]
+
+#corruptions for cifar10-c defined in Hendrycks/Dietterich; https://arxiv.org/pdf/1903.12261.pdf
+  hd_corruptions = [
+    'gaussian_noise',
+    'shot_noise',
+    'impulse_noise',
+    'defocus_blur',
+    'frosted_glass_blur',
+    'motion_blur',
+    'zoom_blur',
+    'snow',
+    'frost',
+    'fog',
+    'brightness',
+    'contrast',
+    'elastic',
+    'pixelate',
+    'jpeg_compression']
+    
+#corruptions found within the ub framework    
+  all_corruptions = hd_corruptions + ['spatter',
+                                      'speckle_noise',
+                                      'saturate',
+                                      'gaussian_blur']
+
+#corruptions used in figure from https://arxiv.org/abs/1906.02530
+  googlefig_corruptions = [
+    'gaussian_noise',
+    'shot_noise',
+    'impulse_noise',
+    'defocus_blur',
+    'glass_blur',
+    #
+    'zoom_blur',
+    #
+    'frost',
+    'fog',
+    'brightness',
+    'contrast',
+    'elastic_transform',
+    'pixelate',
+    #
+    'spatter',
+    'speckle_noise',
+    'saturate',
+    'gaussian_blur']
+
+  dictionary = {'glass_blur':'frosted_glass_blur','elastic_transform':'elastic'}
+  googlefig_corruptions = [dictionary[c] if c in dictionary.keys() else c for c in googlefig_corruptions]    
+    
+  if corruptions_variant == 'hd':
+    corruption_types = hd_corruptions
+  elif corruptions_variant == 'all':
+    corruption_types = all_corruptions
+  elif corruptions_variant == 'googlefig':
+    corruption_types = googlefig_corruptions
   else:
-    corruption_types = [
-        'brightness',
-        'contrast',
-        'defocus_blur',
-        'elastic_transform',
-        'fog',
-        'frost',
-        'glass_blur',  # Called frosted_glass_blur in CIFAR-10.
-        'gaussian_blur',
-        'gaussian_noise',
-        'impulse_noise',
-        'jpeg_compression',
-        'pixelate',
-        'saturate',
-        'shot_noise',
-        'spatter',
-        'speckle_noise',  # Does not exist for CIFAR-10.
-        'zoom_blur',
-    ]
+    corruption_types = all_corruptions
+    
   max_intensity = 5
   return corruption_types, max_intensity
 

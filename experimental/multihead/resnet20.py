@@ -352,8 +352,7 @@ class resnet20(tf.keras.Model):
         
         return {'logits':logits,'probs':probs,'certs':certs,'logits_from_certs':logits_from_certs}
 
-
-  
+        
 #    def train_step(self, data):
 #         # Unpack the data. Its structure depends on your model and
 #         # on what you pass to `fit()`.
@@ -395,7 +394,7 @@ def load_model(model,
                verbose=False
               ):
     
-    load = model.load_weights(FLAGS.model_file).expect_partial()
+    load = model.load_weights(FLAGS['model']['model_file']).expect_partial()
     if verbose: logging.info(f'Loaded model...{FLAGS.model_file}')
 
 def save_model(model,
@@ -403,13 +402,13 @@ def save_model(model,
                verbose=False
               ):
     
-    model_dir = os.path.join(FLAGS.output_dir, 'model.ckpt-{}'.format(FLAGS.epochs))
+    model_dir = os.path.join(FLAGS['model']['output_dir'], 'model.ckpt-{}'.format(FLAGS.epochs))
     if verbose: logging.info('Saving model to '+model_dir)
     model.save_weights(model_dir)
 
 def configure_model(FLAGS):
     callbacks = []
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS.output_dir,'logs'))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS['model']['output_dir'],'logs'))
     
     #filepath= os.path.join(FLAGS.output_dir,"weights-improvement-{epoch:03d}-{val_accuracy:.2f}.hdf5")
     filepath = FLAGS.model_file
@@ -576,9 +575,121 @@ def _extract_conf_acc(probs,labels,bins=0):
         return confidences, accuracies
     
 # nonlinear calibration
+class calLayer(tf.keras.layers.Layer):
+    def __init__(self,
+                 basis_type: str = 'uniform',
+                 basis_params: list = [-20,20,20],
+                 basis_list: list = [-2,-1,0,1,2],
+                 train_basis=True):
+        super(calLayer,self).__init__()
+        self.basis_type = basis_type
+        self.basis_params = basis_params
+        self.basis_list = basis_list
+        self.train_basis = train_basis
+        
+    def build(self, input_shape):
+#         if input_shape[-1]!=1:
+#             raise ValueError('input_shape != 1')
+
+        if self.basis_type=='uniform':
+            self.basis_exponents = np.linspace(*self.basis_params)
+        else:
+            self.basis_exponents = self.basis_list
+        
+        self.basis_exponents = tf.convert_to_tensor(self.basis_exponents,dtype=tf.float32)
+        self.alphas = tf.exp(self.basis_exponents)            
+        #self.alphas = tf.cast(self.alphas,dtype=tf.float32)
+        self.alphas = tf.Variable(name='calLayer_alphas',
+                                  initial_value=self.alphas,
+                                  trainable=self.train_basis)
+        self.W1 = self.add_weight(name='calLayer_weights',
+                                  shape=(len(self.basis_exponents),),
+                                  initializer="he_normal",
+                                  trainable=True)
+    
+    def get_config(self):
+        return {"basis_type": self.basis_type,
+                "basis_params": self.basis_params,
+                "basis_list": self.basis_list,
+                "train_basis": self.train_basis}
+
+    def call(self,inputs):
+        inputs_shape = tf.shape(inputs)
+        inputs_r = tf.reshape(inputs,shape=(-1,1))
+        self.beta = tf.nn.softmax(self.W1)
+        #print(self.alphas)
+        x_alpha = tf.pow(inputs_r,self.alphas)
+        out = tf.reduce_sum(self.beta*x_alpha,axis=-1)
+        
+        return tf.reshape(out,shape=inputs_shape)
+
+def _form_cal_dataset(uncal_model:tf.keras.Model,
+                      output_name:str,
+                      train_dataset,
+                      dataset_bins:int,
+                      steps:int):
+
+    cal_dataset = dict()
+    #FLAGS = exp1.FLAGS
+    #self.cal_dataset = train_dataset
+    #dataset = exp1.datasets['cifar10']['val']
+    labels = np.empty(0)
+    probs = None
+
+    for i,(x,y) in enumerate(train_dataset):
+        if i>steps: break
+
+        out = uncal_model(x)[output_name].numpy()
+        labels = np.append(labels,y.numpy().astype('int32'))
+        probs = out if type(probs)==type(None) else np.concatenate((probs,out))
+
+    confidences, accuracies = _extract_conf_acc(probs=probs,labels=labels.astype('int32'),bins=dataset_bins)
 
 
+    cal_dataset['x'] = tf.convert_to_tensor(confidences,dtype=tf.float32)
+    cal_dataset['y'] = tf.convert_to_tensor(accuracies,dtype=tf.float32)     
 
+    return cal_dataset
+    
+class nonlin_calibrator(tf.keras.Model):
+    def __init__(self,
+                 basis_type: str = 'uniform',
+                 basis_params: list = [-20,20,10],
+                 basis_list: list = [-2,-1,0,1,2],
+                 train_basis: bool = True):
+        
+        super(nonlin_calibrator,self).__init__()
+        self.layer = calLayer(basis_type = basis_type,
+                              basis_params = basis_params,
+                              basis_list = basis_list,
+                              train_basis = train_basis)
+
+    def call(self, 
+             inputs: tf.Tensor, 
+             training: bool = False) -> tf.Tensor:
+        x = self.layer(inputs)
+        return x
+
+class cal_model(tf.keras.Model):
+    def __init__(self,
+                 uncal_model: tf.keras.Model,
+                 calibrator: tf.keras.Model,
+                 output_name: str):
+        super(cal_model,self).__init__()
+        
+        #self.inp = tf.keras.layers.Input(shape=(32,32,3))
+        self.uncal_model = uncal_model
+        self.calibrator = calibrator
+        self.output_name = output_name
+        
+    def call(self,
+             inputs:tf.Tensor):
+        x = self.uncal_model(inputs)[self.output_name]
+        x = self.calibrator(x)
+        
+        return {self.output_name: x}
+        
+        
 def calibrate_model_nonlin(model,
                     dataset,
                     FLAGS,

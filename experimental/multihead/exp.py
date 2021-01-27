@@ -14,19 +14,14 @@ import uncertainty_metrics as um
 from resnet20 import one_vs_all_loss_fn
 from resnet20 import create_model as resnet20
 
+from resnet20 import nonlin_calibrator,_form_cal_dataset, cal_model
+
 from metrics import nll
 from metrics import BrierScore
 
 
 from func import _load_datasets_basic, _load_datasets_corrupted, _load_datasets_OOD, _reconcile_flags_with_dataset
 
-# from keras.backend.tensorflow_backend import set_session
-# import tensorflow as tf
-# config = tf.ConfigProto()
-# config.gpu_options.allow_growth = True  # dynamically grow the memory used on the GPU
-# config.log_device_placement = True  # to log device placement (on which device the operation ran)
-# sess = tf.Session(config=config)
-# set_session(sess)  # set this TensorFlow session as the default session for Keras
 
 class experiment:
     
@@ -36,6 +31,7 @@ class experiment:
         self.verbose = verbose
         self.FLAGS = dict()
         self.model = None
+        self.cal_model = None
         self.callbacks = dict()
         self.metrics = None
         self.loss = None
@@ -83,12 +79,54 @@ class experiment:
                 
         self.FLAGS = AttrDict(FLAGS_default)
 
+    def load_data(self,overwrite=True):
+        
+        if self.verbose: print(f'Loading dataset={self.FLAGS.dataset}...')        
+        if overwrite:
+            self.datasets = dict()
+            self.data_builders = dict()
+            
+        if self.FLAGS.dataset == 'cifar10':
+            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
+            self.datasets = {'cifar10': {'train': train_dataset,'val': val_dataset,'test': test_dataset}}
+            self.data_builders = {'cifar10': dataset_builder}
+            self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10'],self.FLAGS)
+            
+        elif self.FLAGS.dataset == 'cifar10-c':
+            flags = self.FLAGS.copy()
+            flags.dataset = 'cifar10'
+            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
+            _, test_datasets_corrupt = _load_datasets_corrupted(flags)
+            self.data_builders = {'cifar10-c': dataset_builder}
+
+            for name in test_datasets_corrupt.keys():
+                if name not in self.datasets.keys(): self.datasets[name] = dict()
+                self.datasets[name]['test'] = test_datasets_corrupt[name]  
+                
+            self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10-c'],self.FLAGS)
+            
+        elif self.FLAGS.dataset == 'ood':
+            ood_datasets, ood_builders = _load_datasets_OOD(self.FLAGS)
+            self.data_builders = ood_builders
+
+            for name in ood_datasets.keys():
+                if name not in self.datasets.keys(): self.datasets[name] = dict()
+                self.datasets[name]['test'] = ood_datasets[name]         
+            
+            # TODO: reconcile FLAGS!
+            
+        else:
+            raise ValueError(f'unknown dataset={self.FLAGS.dataset}')
+        self.dataset_loaded = True    
+        
     def set_output_dir(self):
-        dirpath = self.FLAGS['model']['output_dir']
+        dirpath = self.FLAGS['exp']['output_dir']
         if not os.path.exists(dirpath): os.makedirs(dirpath)
         path = os.path.join(dirpath,'FLAGS.json')
         if not os.path.exists(path): self.save_flags(path=path)
-        
+
+            
+            
     def load_model(self,path=None):
         if path is None: path = self.FLAGS['model']['model_file']
         load = self.model.load_weights(path).expect_partial()
@@ -97,8 +135,8 @@ class experiment:
     def save_model(self,path=None):
         if path is None:
             #epochs = self.FLAGS['train_params']['epochs']
-            #path = os.path.join(self.FLAGS['model']['output_dir'], f'model.ckpt-{epochs}')
-            path = os.path.join(self.FLAGS['model']['output_dir'], f'model.ckpt')
+            #path = os.path.join(self.FLAGS['exp']['output_dir'], f'model.ckpt-{epochs}')
+            path = os.path.join(self.FLAGS['exp']['output_dir'], f'model.ckpt')
         
 #         if self.FLAGS['exp']['tune_hyperparams']:
 #             models = self.tuner.get_best_models(num_models=1)
@@ -134,7 +172,7 @@ class experiment:
             print(f'Setting train callbacks...ModelCheckpoint={use_cp}')
             print(f'Setting train callbacks...EarlyStopping={use_es}')
         if use_tb:
-            self.callbacks['tensorboard'] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(self.FLAGS['model']['output_dir'],'logs'))
+            self.callbacks['tensorboard'] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(self.FLAGS['exp']['output_dir'],'logs'))
     
         if use_cp:
             self.callbacks['checkpoint'] = tf.keras.callbacks.ModelCheckpoint(self.FLAGS['model']['model_file'], 
@@ -257,7 +295,42 @@ class experiment:
             else:
                 raise ValueError(f'unknown optimizer={nopt}')                
 
+    def model_train(self,train_dataset=None,val_dataset=None):
+        
+        if train_dataset is None:
+            train_dataset = self.datasets[self.FLAGS['train_dataset']]['train']
+        if val_dataset is None:
+            val_dataset = self.datasets[self.FLAGS['eval_dataset']]['val']
+            
+        if self.verbose: print(f'Starting plain training...') 
+        history = self.model.fit(train_dataset,
+                                 batch_size=self.FLAGS['train_params']['batch_size'],
+                                 epochs=self.FLAGS['train_params']['epochs'],
+                                 steps_per_epoch=self.FLAGS['train_params']['steps_per_epoch'],
+                                 validation_data=val_dataset,
+                                 validation_steps=self.FLAGS['train_params']['validation_steps'],
+                                 validation_freq=self.FLAGS['train_params']['eval_frequency'],
+                                 callbacks=self._get_callbacks(),
+                                 shuffle=False)                    
                 
+    def model_compile(self):
+        if self.verbose: print(f'Compiling plain trainer...')          
+        self.model.compile(optimizer=self.optimizer,
+                           loss=self.loss,
+                           metrics=self.metrics)                
+                
+    def prepare_model(self):
+        self.set_model()  
+        self.set_metrics()
+        self.set_loss()
+        self.set_optimizer()
+        self.set_callbacks()
+        self.model_compile()
+        if self.FLAGS['model']['pretrained']:
+            self.load_model()    
+      
+
+    
     def tuner_compile(self):
         if self.verbose: print(f'Compiling kerastuner trainer...')          
         def tunable_model(hp):
@@ -288,13 +361,11 @@ class experiment:
                                                     executions_per_trial=1,
                                                     directory=self.FLAGS['tune']['dir'],
                                                     project_name=self.FLAGS['tune']['subdir'])
-    
-    def model_compile(self):
-        if self.verbose: print(f'Compiling plain trainer...')          
-        self.model.compile(optimizer=self.optimizer,
-                           loss=self.loss,
-                           metrics=self.metrics)
-              
+
+    def prepare_tuner(self):
+        if self.FLAGS['exp']['tune_hyperparams']:
+            self.tuner_compile()
+                
     def model_tune(self):
         if self.verbose: print(f'Starting kerastuner training...')  
         self.tuner.search(self.datasets[self.FLAGS['train_dataset']]['train'],
@@ -304,29 +375,12 @@ class experiment:
                          callbacks=[]) 
         
 
-    def model_train(self,train_dataset=None,val_dataset=None):
-        
-        if train_dataset is None:
-            train_dataset = self.datasets[self.FLAGS['train_dataset']]['train']
-        if val_dataset is None:
-            val_dataset = self.datasets[self.FLAGS['eval_dataset']]['val']
-            
-        if self.verbose: print(f'Starting plain training...') 
-        history = self.model.fit(train_dataset,
-                                 batch_size=self.FLAGS['train_params']['batch_size'],
-                                 epochs=self.FLAGS['train_params']['epochs'],
-                                 steps_per_epoch=self.FLAGS['train_params']['steps_per_epoch'],
-                                 validation_data=val_dataset,
-                                 validation_steps=self.FLAGS['train_params']['validation_steps'],
-                                 validation_freq=self.FLAGS['train_params']['eval_frequency'],
-                                 callbacks=self._get_callbacks(),
-                                 shuffle=False)    
-
-    def model_calibrate(self):
-        if self.verbose: print(f'Starting plain calibration...')         
-        return 0
-    
-    def model_eval(self,datasets=None,save_result=False):
+    def evaluate(self,
+                 model=None,
+                 datasets=None,
+                 save_results=False,
+                 postfix=''):
+        if model==None: model = self.model
         if datasets is None:
             ds_keys = self.datasets.keys()
             eval_ds = list(ds_keys)[0]
@@ -335,16 +389,16 @@ class experiment:
             datasets = {eval_ds : self.datasets[eval_ds]['test']}
         
         if self.verbose: print(f'Starting evaluation...')
-        if save_result:
-            model_name = self.FLAGS['model']['output_dir']+'_'+self.FLAGS['certainty_variant']
+        if save_results:
+            model_name = self.FLAGS['exp']['output_dir']+'_'+self.FLAGS['certainty_variant']
             df = pd.DataFrame(columns=['dataset','metric',model_name])
             
         for ds_name,dataset in datasets.items():
             if self.verbose: print('dataset =',ds_name)
             #out_metrics = self.model.evaluate(dataset, return_dict=True)
-            out_metrics = self.model.evaluate(dataset,return_dict=True)
+            out_metrics = model.evaluate(dataset,return_dict=True)
             
-            if save_result:
+            if save_results:
                 record = {}
                 record['dataset'] = ds_name
 #                 metrics_vals = out_metrics.values()
@@ -377,53 +431,25 @@ class experiment:
                 print(out_metrics)
                 
                 
-        if save_result:
-            df.to_csv(os.path.join(self.FLAGS['model']['output_dir'],model_name+'_'+self.FLAGS['dataset']+'_metrics.csv'))
+        if save_results:
+            #df.to_csv(os.path.join(self.FLAGS['exp']['output_dir'],model_name+'_'+self.FLAGS['dataset']+postfix+'.csv'))
+            return df
+        else:
+            return 0
+
+        
 #     def read_data(self,datasets,builders):
 #         self.datasets = datasets
 #         self.data_builders = builders
 #         self.FLAGS = _reconcile_flags_with_dataset(self.data_builders[self.FLAGS['train_dataset']],self.FLAGS)
 #         self.dataset_loaded = True
-        
-    def load_data(self,overwrite=True):
-        
-        if self.verbose: print(f'Loading dataset={self.FLAGS.dataset}...')        
-        if overwrite:
-            self.datasets = dict()
-            self.data_builders = dict()
-            
-        if self.FLAGS.dataset == 'cifar10':
-            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
-            self.datasets = {'cifar10': {'train': train_dataset,'val': val_dataset,'test': test_dataset}}
-            self.data_builders = {'cifar10': dataset_builder}
-            self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10'],self.FLAGS)
-            
-        elif self.FLAGS.dataset == 'cifar10-c':
-            flags = self.FLAGS.copy()
-            flags.dataset = 'cifar10'
-            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
-            _, test_datasets_corrupt = _load_datasets_corrupted(flags)
-            self.data_builders = {'cifar10-c': dataset_builder}
 
-            for name in test_datasets_corrupt.keys():
-                if name not in self.datasets.keys(): self.datasets[name] = dict()
-                self.datasets[name]['test'] = test_datasets_corrupt[name]  
-                
-            self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10-c'],self.FLAGS)
-            
-        elif self.FLAGS.dataset == 'ood':
-            ood_datasets, ood_builders = _load_datasets_OOD(self.FLAGS)
-            self.data_builders = ood_builders
 
-            for name in ood_datasets.keys():
-                if name not in self.datasets.keys(): self.datasets[name] = dict()
-                self.datasets[name]['test'] = ood_datasets[name]         
-            
-            # TODO: reconcile FLAGS!
-            
-        else:
-            raise ValueError(f'unknown dataset={self.FLAGS.dataset}')
-        self.dataset_loaded = True
+    def model_eval(self,datasets=None,save_results=False,postfix=''):
+        return self.evaluate(model=self.model,
+                      datasets=datasets,
+                      save_results=save_results,
+                      postfix=postfix)
     
     def extract_best_hp(self):
         best_hp_list = self.tuner.get_best_hyperparameters()
@@ -432,28 +458,92 @@ class experiment:
             bhv = best_hp.values
             for key,val in bhv.items():
                 self.FLAGS['optimizer'][key] = val
-   
-    def prepare_model(self):
-        self.set_model()  
-        self.set_metrics()
-        self.set_loss()
-        self.set_optimizer()
-        if self.FLAGS['exp']['tune_hyperparams']:
-            self.tuner_compile()
+
+                
+    def load_calibrator(self,path=None):
+        if path is None: path = self.FLAGS['cal']['model_file']
+        load = self.calibrator.load_weights(path).expect_partial()
+        if self.verbose: print(f'Loaded calibrator...{path}')
+
+    def save_calibrator(self,path=None):
+        if path is None:
+            #path = os.path.join(self.FLAGS['exp']['output_dir'], f'calibrator.ckpt')
+            path = self.FLAGS['cal']['model_file']
+        self.calibrator.save_weights(path)
+        if self.verbose: print(f'Saving calibrator to {path}')
+
+    def set_calibrator(self,cal_variant=None):
+        if cal_variant is None:
+            cal_variant = self.FLAGS['cal']['variant']
+        if self.verbose: print(f'Setting calibrator cal_variant={cal_variant}')
+        if cal_variant == 'nonlin':
+            self.calibrator =  nonlin_calibrator(basis_type = self.FLAGS['cal']['basis_type'],
+                                                 basis_params = self.FLAGS['cal']['basis_params'],
+                                                 train_basis = self.FLAGS['cal']['train_basis'])
         else:
-            self.model_compile()
-            if self.FLAGS['model']['pretrained']:
-                self.load_model()
-        self.set_callbacks()        
+            raise ValueError(f'unknown cal_variant={cal_variant}') 
+        
+    def calibrator_compile(self):
+        
+        loss = tf.keras.losses.MSE
+        optimizer = ub.optimizers.get(optimizer_name='adam',
+                                      learning_rate_schedule='constant',
+                                      learning_rate=0.1,
+                                      weight_decay=None)
+        metrics = []
+        
+        self.calibrator.compile(optimizer=optimizer,
+                                loss=loss,
+                                metrics=metrics)           
+
+    def prepare_calibrator(self):
+        if self.verbose: print(f'Preparing calibrator...')
+        self.set_calibrator()  
+        self.calibrator_compile()
+        if self.FLAGS['cal']['pretrained']:
+            self.load_calibrator()    
+
+
+    def calibrator_train(self,cal_dataset=None):
+        if cal_dataset is None:
+            
+            self.cal_dataset = _form_cal_dataset(uncal_model=self.model,
+                                     output_name=self.FLAGS['cal']['model_output'],
+                                     train_dataset = self.datasets[self.FLAGS['cal']['train_dataset']]['val'],
+                                     dataset_bins=self.FLAGS['cal']['dataset_bins'],
+                                     steps = self.FLAGS['train_params']['validation_steps'])
+            cal_dataset = self.cal_dataset
+            
+        if self.verbose: print(f'Starting plain calibration...')
+        self.calibrator.fit(x=cal_dataset['x'],y=cal_dataset['y'],epochs=self.FLAGS['cal']['epochs'])            
     
+
+    def cal_model_eval(self,datasets=None,save_results=False,postfix=''):
+        return self.evaluate(model=self.cal_model,
+                      datasets=datasets,
+                      save_results=save_results,
+                      postfix=postfix)
+         
+    def prepare_cal_model(self):
+        if self.verbose: print(f'Preparing cal_model...')
+        self.cal_model = cal_model(uncal_model=self.model,
+                                   calibrator=self.calibrator,
+                                   output_name=self.FLAGS['cal']['model_output'])  
+        self.cal_model.compile(metrics=self.metrics[self.FLAGS['cal']['model_output']])
+
     def prepare_exp(self,reload_dataset=False):
         
         self.set_seed()
         self.set_output_dir()
-        self.prepare_model()    
+        self.prepare_model()
+
+        self.prepare_tuner()
         if self.FLAGS['exp']['load_data']: 
             if not self.dataset_loaded or reload_dataset:
                 self.load_data()
+                
+        self.prepare_calibrator()
+        self.prepare_cal_model()
         
     def run_exp(self,phases=None):
         if phases is None: phases = self.FLAGS['exp']['phases']
@@ -465,16 +555,19 @@ class experiment:
                 
         if 'train' in phases:
             self.model_train()
-                
+            self.curr_model = self.model    
             if self.FLAGS['exp']['save_model']:
                 self.save_model()
+                
         if 'cal' in phases:
-            self.model_calibrate()
+            self.calibrator_train()
             if self.FLAGS['exp']['save_model']:
-                self.save_cal_model()
+                self.save_calibrator()
+                
         if 'eval' in phases:
-            self.model_eval()
-           
-#         if 'comp_metrics' in phases:
-#             self.comp_metrics()
+            _ = self.model_eval()
             
+        if 'cal_eval' in phases:
+            _ = self.cal_model_eval()            
+           
+ 
