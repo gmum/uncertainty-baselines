@@ -13,7 +13,7 @@
     
     "model": {
         "name": "resnet20",
-        "pretrained": true,
+        "pretrained": false,
         "model_file": "outdir/model.ckpt"
     },
     
@@ -63,7 +63,7 @@
     
     "cal": {
         "variant": "nonlin",
-        "pretrained": true,
+        "pretrained": false,
         "model_file": "outdir/calibrator.ckpt",
         "model_output": "probs",
         "train_dataset": "cifar10",
