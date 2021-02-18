@@ -13,6 +13,7 @@ import uncertainty_metrics as um
 
 from matplotlib.ticker import FormatStrFormatter
 
+
 def load_df_dict(path='results'):
     df_dict = dict()
     for file in os.listdir(path):
@@ -94,28 +95,12 @@ def load_pivot_df_dict_googlefig(hdf5file='metrics_googlefig/cifar_model_predict
 
     return gfig_dict
 
+
 def cifar10c_shift_plot(df_dict_pivot,metric,model_list,ax):
     '''
     plot shift plot for cifar10c
     '''
-#     dfsum = None
-#     for key,df in df_dict.items():
-#         df_new = df[[metric]]
-#         df_new = df_new.rename({metric:key},axis=1)
-#         if type(dfsum) == type(None):
-#             dfsum = df_new
 
-#         else:
-#             dfsum = pd.merge(left=dfsum,right=df_new,on=['dataset'])
-
-#     dfsum['shift_amount'] = 0
-#     shifts = [1,2,3,4,5]
-#     for shift in shifts:
-#         dfsum.loc[(dfsum.index.str.contains(str(shift))),'shift_amount'] = shift
-        
-#     #model_list = list(dfsum.columns[:-1])
-#     dfr_sum_melt = pd.melt(dfsum,id_vars=['shift_amount'],value_vars=model_list,var_name='models')
-    
     dfr_sum_melt = pd.DataFrame(columns=['models','shift_amount','value'])
     shifts = [1,2,3,4,5]
     for model in model_list:
@@ -139,6 +124,7 @@ def cifar10c_shift_plot(df_dict_pivot,metric,model_list,ax):
     plt.setp(ax.get_legend().get_title(), fontsize='18')  
     plt.setp(ax.get_legend().get_texts(), fontsize='14')
 
+    
 def colorize(ax,colors):
     no_methods = len(colors)
     box_size = 5 #each box consists of 5 Line2D's
@@ -175,7 +161,6 @@ def colorize(ax,colors):
     for color,patch in zip(colors,ax.get_legend().get_patches()):
         patch.set_facecolor(color)
         
-    
     
 def cifar10c_shift_plots(df_dict_pivot,metrics,model_list,figsize=(15,10)):
   '''
@@ -218,14 +203,12 @@ def cifar10c_shift_plots(df_dict_pivot,metrics,model_list,figsize=(15,10)):
 
 
 # cifar10-c plots
-
 def genplot_c(dfr,metric,ax,ascending=False):
 
   df_metric = dfr[(dfr['dataset']!='clean') & (dfr['metric']==metric)]
   pos2 = [3,2,1,0]
  
   metrics_dict = {'ece':'ECE','acc':'Accuracy','nll':'Negative Log Likelihood','brier':'Brier Score'}
-  #df_metric.boxplot(vert=False,positions=pos2,sym='',ax=ax,grid=(True,False),figsize=(5,5))
   sns.boxplot(data=df_metric,
             linewidth=1,
             width=.8,
@@ -236,6 +219,7 @@ def genplot_c(dfr,metric,ax,ascending=False):
             ax=ax)
   ax.set_title(metrics_dict[metric],fontsize=16)
 
+    
 def cifar10_corrupt_plots(dfr,bbox,legend_fontsize,figsize=(15,20)):
 
   
@@ -247,11 +231,6 @@ def cifar10_corrupt_plots(dfr,bbox,legend_fontsize,figsize=(15,20)):
     ax.set_yticklabels('')
     ax.xaxis.grid(True)
 
-#   genplot_c(dfr,'ece',axs[1],ascending=False)
-#   genplot_c(dfr,'brier',axs[2],ascending=False)
-#   genplot_c(dfr,'nll',axs[3],ascending=False)
-  #axs[3].set_yticklabels('')
-    
   for ax in axs.reshape(-1):
     for line in ax.get_ygridlines():
       line.set_linewidth(0)
@@ -265,7 +244,6 @@ def cifar10_corrupt_plots(dfr,bbox,legend_fontsize,figsize=(15,20)):
              loc='lower center')
   plt.tight_layout()
   return fig,axs
-
 
 
 def pd_merge(dfs,**kwargs):

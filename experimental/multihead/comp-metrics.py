@@ -15,24 +15,18 @@ args = parser.parse_args()
 exp1 = experiment(exp_name='exp1',verbose=True)
 exp1.load_flags(path=args.config)
 exp1.FLAGS['dataset'] = args.dataset
-#exp1.FLAGS['exp']['phases'] = [args.phase]
 exp1.FLAGS['model']['pretrained'] = True
 exp1.FLAGS['cal']['pretrained'] = True
 exp1.FLAGS['exp']['tune_hyperparams'] = False
-#exp1.FLAGS['model']['model_file'] = '1vsall_dm_relu/model.ckpt-250'
 exp1.load_data()
 
 dsets = dict()
 for name, dset_dict in exp1.datasets.items():
     dsets[name] = dset_dict['test']
     
-# certs = ['partial','total','normalized']
 certs = [exp1.FLAGS['certainty_variant']]
 for cert in certs:
-#     exp1.FLAGS['certainty_variant']=cert
     exp1.prepare_exp()
-#     exp1.run_exp(phases=[args.phase],
-#                  save_results=True)
     postfix = '_metrics'
     if args.phase=='eval':
         postfix+='_uncal'
@@ -41,7 +35,7 @@ for cert in certs:
     #   split probs from certs
         model_name_probs = exp1.FLAGS['exp']['output_dir']+'_probs_'+exp1.FLAGS['dataset']+postfix+'.csv'
         model_name_certs = exp1.FLAGS['exp']['output_dir']+'_'+cert+'_'+exp1.FLAGS['dataset']+postfix+'.csv'
-        #df = pd.read_csv(os.path.join(exp1.FLAGS['exp']['output_dir'],model_name_certs),index_col=0)
+
         probs_mask = df['metric'].str.contains('probs|loss')
         certs_mask = df['metric'].str.contains('certs|loss')
         dfprobs = df[probs_mask]

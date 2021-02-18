@@ -1,26 +1,26 @@
 {
     "exp": {
         "phases": ["tune","train","cal","eval","cal_eval"],
-        "output_dir": "outdir",
+        "output_dir": "softmax",
         "load_data": true,
         "save_model": true,
         "save_weights_only": true,
         "seed": 1337,
         "use_early_stopping": false,
-        "save_checkpoints": false,
+        "save_checkpoints": true,
         "use_tensorboard": false,
-        "tune_hyperparams": false
+        "tune_hyperparams": true
     },
     
     "model": {
         "name": "resnet20",
         "pretrained": false,
-        "model_file": "outdir/model"
+        "model_file": "softmax/model.ckpt"
     },
     
     "activation": "relu",
     "certainty_variant": "partial",
-    "model_variant": "1vsall",
+    "model_variant": "vanilla",
     "logit_variant": "affine",
     
     "dataset": "cifar10",
@@ -41,7 +41,7 @@
     "weight_decay": 0.0001,
     
     "train_params": {
-        "epochs": 1,
+        "epochs": 200,
         "batch_size": 512,
         "eval_batch_size": 100,
         "eval_frequency": 100,
@@ -55,18 +55,18 @@
     
     "tune": {
         "dir": "tune_dir",
-        "subdir": "subdir",
-        "epochs": 50,
+        "subdir": "softmax",
+        "epochs": 20,
         "batch_size": 512,
         "by_metric": "acc",
-        "num_trials": 6
+        "num_trials": 50
     },
     
     "cal": {
         "variant": "nonlin",
         "pretrained": false,
-        "model_file": "outdir/calibrator.ckpt",
-        "model_output": "certs",
+        "model_file": "softmax/calibrator.ckpt",
+        "model_output": "probs",
         "train_dataset": "cifar10",
         "append_random_dataset": true,
         "random_fraction": 0.1,

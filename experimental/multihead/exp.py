@@ -13,20 +13,13 @@ import uncertainty_metrics as um
 
 from resnet import one_vs_all_loss_fn
 from resnet import resnet20
-from resnet import resnet50
-from resnet import dummymodel
 from resnet import nonlin_calibrator,_form_cal_dataset, cal_model
-
-from resnet_alter import resnet50 as resnet50v2
 
 from metrics import nll
 from metrics import BrierScore
 
-
-from func import _load_datasets_cifar10_basic, _load_datasets_cifar10_corrupted, _load_datasets_OOD
+from func import _load_datasets_cifar10_basic, _load_datasets_cifar10_corrupted
 from func import _reconcile_flags_with_dataset, _augment_dataset
-from func import _load_datasets_imagenet_basic
-from func import ImageNetLearningRateSchedule, ImageNetWarmupDecaySchedule
 from func import FixedModelCheckpoint
 from func import update_dict
 
@@ -74,8 +67,6 @@ class experiment:
         
     def load_flags(self,path=None,overwrite_default=True):
         
-
-        
         if path is None:
             self.FLAGS = AttrDict(FLAGS_default)
             return None
@@ -88,23 +79,7 @@ class experiment:
             with open('FLAGS.json','r') as fp:
                 FLAGS_default = json.load(fp)
             self.FLAGS = AttrDict(update_dict(FLAGS_default,FLAGS))
-#             for name,val in FLAGS_default.items():
-                
-#                 if type(val)==type(dict()):
-#                     if name in FLAGS.keys(): 
-#                         print(f'FLAGS: dict key {name} does not exist, setting default')
-#                         FLAGS_default[name] = FLAGS[name]
-#                     else:
-                        
-#                     for subname,subval in val.items():
-#                         if subname in FLAGS[name].keys(): 
-#                             print(f'FLAGS:     subkey {subname} does not exist, ')
-                            
-#                             FLAGS_default[name] = FLAGS[name]
-#                 else:
-#                     if name in FLAGS.keys(): 
-#                         print(f'FLAGS: key {name} does not exist, setting default')
-#                         FLAGS_default[name] = FLAGS[name]
+
         else:
             self.FLAGS = AttrDict(FLAGS)
    
@@ -145,36 +120,9 @@ class experiment:
                 
             self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10-c'],self.FLAGS)
             
-#         elif self.FLAGS.dataset == 'ood':
-#             ood_datasets, ood_builders = _load_datasets_OOD(self.FLAGS)
-#             self.data_builders = ood_builders
-
-#             for name in ood_datasets.keys():
-#                 if name not in self.datasets.keys(): self.datasets[name] = dict()
-#                 self.datasets[name]['test'] = ood_datasets[name]         
-            
-        elif self.FLAGS.dataset == 'imagenet':
-            dataset_builder = _load_datasets_imagenet_basic(self.FLAGS)
-            self.FLAGS = _reconcile_flags_with_dataset(dataset_builder,self.FLAGS)
-            
-            as_tuple = True
-            train_dataset = dataset_builder.build('train', as_tuple=as_tuple)
-            test_dataset = dataset_builder.build('test', as_tuple=as_tuple)
-            val_dataset = dataset_builder.build('validation', as_tuple=as_tuple)
-
-            self.datasets = {'imagenet': {'train': train_dataset,'val': val_dataset,'test': test_dataset}}
-            self.data_builders = {'imagenet': dataset_builder}
-            
         else:
             raise ValueError(f'unknown dataset={self.FLAGS.dataset}')
         self.dataset_loaded = True    
-        
-#     def distribute_data(self):
-#         if self.strategy.num_replicas_in_sync > 1:
-#             if self.verbose: print(f'Distributing data among...{self.strategy.num_replicas_in_sync} replicas')
-#             for name,dataset in self.datasets.items():
-#                 for sub_name, sub_dataset in dataset.items():    
-#                     self.datasets[name][sub_name] = self.strategy.experimental_distribute_dataset(sub_dataset)
         
     def set_output_dir(self):
         dirpath = self.FLAGS['exp']['output_dir']
@@ -217,19 +165,7 @@ class experiment:
                                  certainty_variant=self.FLAGS['certainty_variant'],
                                  model_variant=self.FLAGS['model_variant'],
                                  logit_variant=self.FLAGS['logit_variant'])
-            
-        elif model_name == 'resnet50':
-            self.model = resnet50v2(batch_size=self.FLAGS['train_params']['batch_size'],
-                                    l2_weight=self.FLAGS['weight_decay'],
-                                    activation_type=self.FLAGS['activation'],
-                                    certainty_variant=self.FLAGS['certainty_variant'],
-                                    model_variant=self.FLAGS['model_variant'],
-                                    logit_variant=self.FLAGS['logit_variant'])
-#             self.model = resnet50v2()
-            
-        elif model_name == 'dummymodel':
-            self.model = dummymodel(batch_size=self.FLAGS['train_params']['batch_size'])
-            
+
         else:
             raise ValueError(f'unknown model_name={model_name}')
         
@@ -248,15 +184,8 @@ class experiment:
         if use_tb:
             self.callbacks['tensorboard'] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(self.FLAGS['exp']['output_dir'],'logs'))
     
-#         if use_cp:
-#             self.callbacks['checkpoint'] = tf.keras.callbacks.ModelCheckpoint(self.FLAGS['model']['model_file'], 
-#                                                                               monitor='val_probs_acc', 
-#                                                                               verbose=1,
-#                                                                               save_best_only=True,
-#                                                                               save_weights_only=True,
-#                                                                               mode='max')
+
         if use_cp:
-            #cpname = os.path.join(self.FLAGS['exp']['output_dir'],'cp','model-{epoch:04d}.ckpt')
             cpname = os.path.join(self.FLAGS['exp']['output_dir'],'cp','model-{epoch:04d}')
             self.callbacks['checkpoint'] = FixedModelCheckpoint(filepath=cpname,
                                                                 verbose=1,
@@ -335,20 +264,10 @@ class experiment:
                 boundaries = [bound_1, bound_2]
                 values = [lr, lr/10, lr/100]
                 lr_scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
+                
             elif lrs == 'const':
                 lr_scheduler = lr
-            elif lrs == 'imagenet_scheduler':
-                spe = self.FLAGS['train_params']['steps_per_epoch']
-                base_lr = lr * self.FLAGS['train_params']['batch_size'] / 256
-                _LR_SCHEDULE = [ (1.0, 5), (0.1, 30), (0.01, 60), (0.001, 80) ]
-                learning_rate = ImageNetLearningRateSchedule(steps_per_epoch = spe,
-                                                             minimum_learning_rate = base_lr/10,
-                                                             initial_learning_rate = base_lr,
-                                                             num_epochs = self.FLAGS['train_params']['epochs'],
-                                                             schedule = _LR_SCHEDULE)
-                warmup_steps = spe*5
-                lr_scheduler = ImageNetWarmupDecaySchedule(lr_schedule = learning_rate,
-                                                           warmup_steps = warmup_steps)
+
             else:
                 raise ValueError(f'unknown lr_scheduler={lrs}')
             return lr_scheduler
@@ -424,7 +343,6 @@ class experiment:
                 
     def prepare_model(self):
         
-#         with self.strategy.scope():
         self.set_model()  
         self.set_metrics()
         self.set_loss()
@@ -510,14 +428,11 @@ class experiment:
             
         for ds_name,dataset in datasets.items():
             if self.verbose: print('dataset =',ds_name)
-            #out_metrics = self.model.evaluate(dataset, return_dict=True)
             out_metrics = model.evaluate(dataset,return_dict=True)
             
             if save_results:
                 record = {}
                 record['dataset'] = ds_name
-#                 metrics_vals = out_metrics.values()
-#                 metrics_names = out_metrics.keys()
                 for metric,metric_val in out_metrics.items():
 
                     record['metric'] = metric
@@ -545,14 +460,10 @@ class experiment:
             else:
                 print(out_metrics)
                 
-                
         if save_results:
-            #df.to_csv(os.path.join(self.FLAGS['exp']['output_dir'],model_name+'_'+self.FLAGS['dataset']+postfix+'.csv'))
             return df
         else:
             return 0
-
-
 
     def model_eval(self,datasets=None,save_results=False,postfix=''):
         return self.evaluate(model=self.model,
@@ -576,7 +487,6 @@ class experiment:
 
     def save_calibrator(self,path=None):
         if path is None:
-            #path = os.path.join(self.FLAGS['exp']['output_dir'], f'calibrator.ckpt')
             path = self.FLAGS['cal']['model_file']
         self.calibrator.save_weights(path)
         if self.verbose: print(f'Saving calibrator to {path}')
@@ -636,7 +546,6 @@ class experiment:
          
     def prepare_cal_model(self):
         if self.verbose: print(f'Preparing cal_model...')
-#         with self.strategy.scope():
         self.cal_model = cal_model(uncal_model=self.model,
                                    calibrator=self.calibrator,
                                    output_name=self.FLAGS['cal']['model_output'])  
@@ -655,7 +564,6 @@ class experiment:
         if self.FLAGS['exp']['load_data']: 
             if not self.dataset_loaded or reload_dataset:
                 self.load_data()
-#                 self.distribute_data()
                 
         self.prepare_calibrator()
         self.prepare_cal_model()
