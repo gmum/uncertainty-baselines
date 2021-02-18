@@ -21,7 +21,7 @@ Results are saved to a ``csv`` file in ``slova`` dir.
 
 * Complete Fig. 5 with benchmarks taken from ["Can You Trust Your Model’s Uncertainty? Evaluating
 Predictive Uncertainty Under Dataset Shift"](https://papers.nips.cc/paper/2019/file/8558cb408c1d76621371888657d2eb1d-Paper.pdf) 
-> python plt_fig-shift.py --benchmark_file path_to_hdf5_file
+> python plot_fig-shift.py --benchmark_file path_to_hdf5_file
 
 #### Other models
 Other implemented models include OVA DM and softmax found in ``cfg`` dir.
