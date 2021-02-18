@@ -19,13 +19,14 @@ from metrics import BrierScore
 from metrics import MMC
 from metrics import nll
 
-def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True):
+
+def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True,reduction = tf.keras.losses.Reduction.SUM,one_hot=False):
     """Requires from_logits=True to calculate correctly."""
     if not from_logits:
         raise ValueError('One-vs-all loss requires inputs to the '
                          'loss function to be logits, not probabilities.')
 
-    def one_vs_all_loss(labels: tf.Tensor, logits: tf.Tensor):
+    def one_vs_all_loss(labels: tf.Tensor, logits: tf.Tensor,reduction=reduction):
         r"""Implements the one-vs-all loss function.
 
         As implemented in https://arxiv.org/abs/1709.08716, multiplies the output
@@ -50,6 +51,9 @@ def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True):
         logits = logits * dm_alpha
         n_classes = tf.cast(logits.shape[1], tf.float32)
 
+        if one_hot:
+            labels = tf.argmax(labels, axis=-1) #decode one_hot
+        
         one_vs_all_probs = tf.math.sigmoid(logits)
         labels = tf.cast(tf.squeeze(labels), tf.int32)
         row_ids = tf.range(tf.shape(one_vs_all_probs)[0], dtype=tf.int32)
@@ -57,15 +61,118 @@ def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True):
 
         # Shape of class_probs is [batch_size,].
         class_probs = tf.gather_nd(one_vs_all_probs, idx)
-
-        loss = (
-            tf.reduce_mean(tf.math.log(class_probs + eps)) +
-            n_classes * tf.reduce_mean(tf.math.log(1. - one_vs_all_probs + eps)) -
-            tf.reduce_mean(tf.math.log(1. - class_probs + eps)))
-
-        return -loss
+        
+        s1 = tf.math.log(class_probs + eps)
+        s2 = tf.reduce_sum(tf.math.log(1. - one_vs_all_probs + eps),axis=-1)
+        s3 = - tf.math.log(1. - class_probs + eps)
+        
+        loss = -s1 - s2 - s3
+        if reduction == tf.keras.losses.Reduction.NONE:
+            return loss
+          
+        elif reduction == tf.keras.losses.Reduction.SUM:
+            return tf.reduce_mean(loss)
 
     return one_vs_all_loss
+
+# def one_vs_all_loss_fn(dm_alpha: float = 1., from_logits: bool = True):
+#     """Requires from_logits=True to calculate correctly."""
+#     if not from_logits:
+#         raise ValueError('One-vs-all loss requires inputs to the '
+#                          'loss function to be logits, not probabilities.')
+
+#     def one_vs_all_loss(labels: tf.Tensor, logits: tf.Tensor):
+#         r"""Implements the one-vs-all loss function.
+
+#         As implemented in https://arxiv.org/abs/1709.08716, multiplies the output
+#         logits by dm_alpha (if using a distance-based formulation) before taking K
+#         independent sigmoid operations of each class logit, and then calculating the
+#         sum of the log-loss across classes. The loss function is calculated from the
+#         K sigmoided logits as follows -
+
+#         \mathcal{L} = \sum_{i=1}^{K} -\mathbb{I}(y = i) \log p(\hat{y}^{(i)} | x)
+#         -\mathbb{I} (y \neq i) \log (1 - p(\hat{y}^{(i)} | x))
+
+#         Args:
+#           labels: Integer Tensor of dense labels, shape [batch_size].
+#           logits: Tensor of shape [batch_size, num_classes].
+
+#         Returns:
+#           A scalar containing the mean over the batch for one-vs-all loss.
+#         """
+#         #eps = tf.keras.backend.epsilon()
+#         eps = 1e-6
+#         #eps = 1e-10
+#         logits = logits * dm_alpha
+#         n_classes = tf.cast(logits.shape[1], tf.float32)
+
+#         one_vs_all_probs = tf.math.sigmoid(logits)
+#         labels = tf.cast(tf.squeeze(labels), tf.int32)
+#         row_ids = tf.range(tf.shape(one_vs_all_probs)[0], dtype=tf.int32)
+#         idx = tf.stack([row_ids, labels], axis=1)
+
+#         # Shape of class_probs is [batch_size,].
+#         class_probs = tf.gather_nd(one_vs_all_probs, idx)
+
+#         loss = (
+#             tf.reduce_mean(tf.math.log(class_probs + eps)) +
+#             n_classes * tf.reduce_mean(tf.math.log(1. - one_vs_all_probs + eps)) -
+#             tf.reduce_mean(tf.math.log(1. - class_probs + eps)))
+
+#         return -loss
+
+#     return one_vs_all_loss
+
+def _calc_certs(probs: tf.Tensor,
+                certainty_variant: str = 'partial') -> tf.Tensor:
+
+    #form Ci's
+    #probs = tf.math.sigmoid(logits)
+    probs_comp = 1-probs
+    K = probs.shape[1]
+    cert_list = []
+
+    for i in range(K):
+        proj_vec = np.zeros(K)
+        proj_vec[i]=1
+        proj_mat = np.outer(proj_vec,proj_vec)
+        proj_mat_comp = np.identity(K)-np.outer(proj_vec,proj_vec)
+        tproj_mat = tf.constant(proj_mat,dtype=tf.float32)
+        tproj_mat_comp = tf.constant(proj_mat_comp,dtype=tf.float32)
+        out = tf.tensordot(probs,tproj_mat,axes=1) + tf.tensordot(probs_comp,tproj_mat_comp,axes=1)
+        cert_list+=[tf.reduce_prod(out,axis=1)]
+
+    if certainty_variant == 'partial':
+        certs = tf.stack(cert_list,axis=1,name='certs')
+
+    elif certainty_variant == 'total':
+        certs = tf.stack(cert_list,axis=1)
+        certs_argmax = tf.one_hot(tf.argmax(certs,axis=1),depth=K)
+        certs_reduce = tf.tile(tf.reduce_sum(certs,axis=1,keepdims=True),[1,K])
+        certs = tf.math.multiply(certs_argmax,certs_reduce)
+
+    elif certainty_variant == 'normalized':
+        certs = tf.stack(cert_list,axis=1)
+        certs_norm = tf.tile(tf.reduce_sum(certs,axis=1,keepdims=True),[1,K])
+        certs = tf.math.divide(certs,certs_norm)
+
+    else:
+        raise ValueError(f'unknown certainty_variant={certainty_variant}')   
+
+    #certs.name = 'certs'
+    return certs
+
+def _calc_logits_from_certs(certs: tf.Tensor, 
+                            eps: float = 1e-6) -> tf.Tensor:
+    #logits_from_certs
+    K = certs.shape[1]
+
+    logcerts = tf.math.log(certs+eps)
+    rs = tf.tile(logcerts[:,:1],[1,K])-logcerts #set first logit to zero (an arbitrary choice)
+    logits_from_certs = -rs    
+
+    return logits_from_certs
+
 
 
 
@@ -94,7 +201,7 @@ class resnetLayer(tf.keras.layers.Layer):
         self.kernel_regularizer = None
         if l2_weight:
             self.kernel_regularizer = tf.keras.regularizers.l2(l2_weight)    
-        
+#         print(f'    resnetLayer num_filters={num_filters}, strides={strides}, kernel_size={kernel_size}')
         self.conv_layer = tf.keras.layers.Conv2D(num_filters,
                                                  kernel_size=kernel_size,
                                                  strides=strides,
@@ -116,7 +223,7 @@ class resnetLayer(tf.keras.layers.Layer):
             
         return x       
     
-class resnetBlock(tf.keras.layers.Layer):
+class resnet20Block(tf.keras.layers.Layer):
     
     def __init__(self,
                 stack: int,
@@ -125,13 +232,16 @@ class resnetBlock(tf.keras.layers.Layer):
                 activation_type: str = 'relu', #relu or sin!
                 l2_weight: float = 1e-4):
         
-        super(resnetBlock,self).__init__()
-        
+        super(resnet20Block,self).__init__()
+
         self.stack = stack
         self.res_block = res_block
         self.num_filters = num_filters
         self.activation_type = activation_type
         self.l2_weight = l2_weight
+        
+#         layers= 3 if self.stack > 0 and self.res_block == 0 else 2
+#         print(f'resnetBlock: stack={stack}, res_block={res_block}, filters={num_filters}, number_layers={layers}')
         
         strides = 1
         if self.stack > 0 and self.res_block == 0:
@@ -143,9 +253,8 @@ class resnetBlock(tf.keras.layers.Layer):
                                activation_type=self.activation_type)
         
         self.l_2 = resnetLayer(num_filters=self.num_filters,
-                        l2_weight=self.l2_weight,
-                        use_activation=False)
-
+                               l2_weight=self.l2_weight,
+                               use_activation=False)
 
         self.l_3 = resnetLayer(num_filters=self.num_filters,
                                kernel_size=1,
@@ -164,7 +273,7 @@ class resnetBlock(tf.keras.layers.Layer):
         x = self.l_add([x, y])
         x = self.l_activation(x)
         return x
-
+    
 class DMLayer(tf.keras.layers.Layer):
   def __init__(self, units: int = 10, **kwargs):
     super(DMLayer, self).__init__(**kwargs)
@@ -191,9 +300,9 @@ class DMLayer(tf.keras.layers.Layer):
     be=tf.expand_dims(self.w,0)
     ae=tf.expand_dims(inputs,-1)
     out = -tf.math.sqrt(tf.math.reduce_euclidean_norm(be-ae,axis=1))
-    #out = tf.math.sqrt(tf.math.reduce_euclidean_norm(be-ae,axis=1))
     
     return out
+
 
 
 class resnet20(tf.keras.Model):
@@ -207,11 +316,6 @@ class resnet20(tf.keras.Model):
                  **params):
         super(resnet20,self).__init__()
         
-#         self.batch_size = params['batch_size'] if 'batch_size' in params.keys() else 128
-#         self.activation_type = params['activation_type'] if 'activation_type' in params.keys() else 'relu'
-#         self.l2_weight = params['l2_weight'] if 'l2_weight' in params.keys() else 0.0
-#         self.certainty_variant = params['certainty_variant'] if 'certainty_variant' in params.keys() else 'partial'
-#         self.model_variant = params['model_variant'] if 'model_variant' in params.keys() else '1vsall'
         self.batch_size = batch_size
         self.l2_weight = l2_weight
         
@@ -251,11 +355,11 @@ class resnet20(tf.keras.Model):
 
         for stack in range(3):
             for res_block in range(self.num_res_blocks):
-                self.res_blocks[stack][res_block] = resnetBlock(stack = stack,
-                                                                res_block = res_block,
-                                                                num_filters = num_filters,
-                                                                activation_type = self.activation_type,
-                                                                l2_weight = self.l2_weight)
+                self.res_blocks[stack][res_block] = resnet20Block(stack = stack,
+                                                                  res_block = res_block,
+                                                                  num_filters = num_filters,
+                                                                  activation_type = self.activation_type,
+                                                                  l2_weight = self.l2_weight)
             num_filters *= 2
         
         self.layer_final_1 = tf.keras.layers.AveragePooling2D(pool_size=8)
@@ -267,60 +371,6 @@ class resnet20(tf.keras.Model):
             self.layer_final_3 = tf.keras.layers.Dense(10, kernel_initializer='he_normal')
         else:
             raise ValueError(f'unknown logit_variant={self.logit_variant}')   
-
-    def _calc_certs(self,
-                    probs: tf.Tensor,
-                    certainty_variant: str = 'partial') -> tf.Tensor:
-        
-        #form Ci's
-        #probs = tf.math.sigmoid(logits)
-        probs_comp = 1-probs
-        K = probs.shape[1]
-        cert_list = []
-        
-        for i in range(K):
-            proj_vec = np.zeros(K)
-            proj_vec[i]=1
-            proj_mat = np.outer(proj_vec,proj_vec)
-            proj_mat_comp = np.identity(K)-np.outer(proj_vec,proj_vec)
-            tproj_mat = tf.constant(proj_mat,dtype=tf.float32)
-            tproj_mat_comp = tf.constant(proj_mat_comp,dtype=tf.float32)
-            out = tf.tensordot(probs,tproj_mat,axes=1) + tf.tensordot(probs_comp,tproj_mat_comp,axes=1)
-            cert_list+=[tf.reduce_prod(out,axis=1)]
-    
-        if certainty_variant == 'partial':
-            certs = tf.stack(cert_list,axis=1)
-    
-        elif certainty_variant == 'total':
-            certs = tf.stack(cert_list,axis=1)
-            certs_argmax = tf.one_hot(tf.argmax(certs,axis=1),depth=K)
-            certs_reduce = tf.tile(tf.reduce_sum(certs,axis=1,keepdims=True),[1,K])
-            certs = tf.math.multiply(certs_argmax,certs_reduce)
-    
-        elif certainty_variant == 'normalized':
-            certs = tf.stack(cert_list,axis=1)
-            certs_norm = tf.tile(tf.reduce_sum(certs,axis=1,keepdims=True),[1,K])
-            certs = tf.math.divide(certs,certs_norm)
-            
-        else:
-            raise ValueError(f'unknown certainty_variant={certainty_variant}')   
-            
-        return certs
-    
-    def _calc_logits_from_certs(self, 
-                                certs: tf.Tensor, 
-                                eps: float = 1e-6) -> tf.Tensor:
-        #logits_from_certs
-        K = certs.shape[1]
-        
-        logcerts = tf.math.log(certs+eps)
-        rs = tf.tile(logcerts[:,:1],[1,K])-logcerts #set first logit to zero (an arbitrary choice)
-        logits_from_certs = -rs    
-    
-        return logits_from_certs
-    
-#     def load_augmentation(self,idg):
-#         self.idg = idg
     
     def call(self, 
              inputs: tf.Tensor, 
@@ -347,200 +397,271 @@ class resnet20(tf.keras.Model):
         else:
             raise ValueError(f'unknown model_variant={self.model_variant}')
         
-        certs = self._calc_certs(probs, certainty_variant = self.certainty_variant)
-        logits_from_certs = self._calc_logits_from_certs(certs = certs)
+        certs = _calc_certs(probs, certainty_variant = self.certainty_variant)
+        logits_from_certs = _calc_logits_from_certs(certs = certs)
         
         return {'logits':logits,'probs':probs,'certs':certs,'logits_from_certs':logits_from_certs}
 
         
-#    def train_step(self, data):
-#         # Unpack the data. Its structure depends on your model and
-#         # on what you pass to `fit()`.
-#         x, y = data
-#         with tf.GradientTape() as tape:
-#             y_pred = self(x, training=True)  # Forward pass
-#             # Compute the loss value
-#             # (the loss function is configured in `compile()`)
-#             loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
+    def train_step(self, data):
+        # Unpack the data. Its structure depends on your model and
+        # on what you pass to `fit()`.
+        x, y = data
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)  # Forward pass
+            # Compute the loss value
+            # (the loss function is configured in `compile()`)
+            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
 
-#         # Compute gradients
-#         trainable_vars = self.trainable_variables
-#         gradients = tape.gradient(loss, trainable_vars)
-#         # Update weights
-#         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
-#         # Update metrics (includes the metric that tracks the loss)
-#         self.compiled_metrics.update_state(y, y_pred)
-#         # Return a dict mapping metric names to current value
-#         return {m.name: m.result() for m in self.metrics}
+        # Compute gradients
+        trainable_vars = self.trainable_variables
+        gradients = tape.gradient(loss, trainable_vars)
+        # Update weights
+        self.optimizer.apply_gradients(zip(gradients, trainable_vars))
+        # Update metrics (includes the metric that tracks the loss)
+        self.compiled_metrics.update_state(y, y_pred)
+        # Return a dict mapping metric names to current value
+        return {m.name: m.result() for m in self.metrics}
     
+class resnet50Block(tf.keras.layers.Layer):
+    
+    def __init__(self,
+                stack: int,
+                res_block: int,
+                num_filters: int = 16,
+                activation_type: str = 'relu', #relu or sin!
+                l2_weight: float = 1e-4):
+        
+        super(resnet50Block,self).__init__()
 
-def create_model(batch_size: int,
+        self.stack = stack
+        self.res_block = res_block
+        self.num_filters = num_filters
+        self.activation_type = activation_type
+        self.l2_weight = l2_weight
+        
+
+        
+        strides = 1
+        if self.stack > 0 and self.res_block == 0:
+            strides = 2
+#         print(f'resnet50Block: stack={stack}, res_block={res_block}, filters={num_filters}')
+        
+        self.l_1 = resnetLayer(num_filters=self.num_filters,
+                               kernel_size=1,
+                               strides=strides,
+                               l2_weight=self.l2_weight,
+                               activation_type=self.activation_type)
+
+        self.l_2 = resnetLayer(num_filters=self.num_filters,
+                               kernel_size=3,
+                               l2_weight=self.l2_weight,
+                               activation_type=self.activation_type)
+        
+        self.l_3 = resnetLayer(num_filters=4*self.num_filters,
+                               kernel_size=1,
+                               l2_weight=self.l2_weight,
+                               use_activation=False,
+                               use_norm=True)
+
+        self.l_4 = resnetLayer(num_filters=4*self.num_filters,
+                               kernel_size=1,
+                               strides=strides,
+                               l2_weight=self.l2_weight,
+                               use_activation=False)
+
+        self.l_add = tf.keras.layers.Add()
+        self.l_activation = _activ(self.activation_type)
+        
+    def call(self,inputs: tf.Tensor) -> tf.Tensor:
+        y = self.l_1(inputs)
+        y = self.l_2(y)
+        y = self.l_3(y)
+        if self.res_block == 0:
+            x = self.l_4(inputs)
+        else:
+            x = inputs
+            
+        x = self.l_add([x, y])
+        x = self.l_activation(x)
+        return x
+
+#agreed with tf.keras.applications.ResNet50
+class resnet50(tf.keras.Model):
+    def __init__(self,
+                 batch_size: int = 128,
                  l2_weight: float = 0.0,
-                 activation_type: str = 'relu', #relu or sine
-                 certainty_variant: str = 'partial', # total, partial or normalized
+                 activation_type: str = 'relu', #relu or sin
+                 certainty_variant: str = 'partial', #partial, total or normalized
                  model_variant: str = '1vsall', #1vsall or vanilla
                  logit_variant: str = 'affine', #affine or dm
-                 **unused_kwargs: Dict[str, Any]) -> tf.keras.models.Model:
-    
-    return resnet20(batch_size=batch_size,
-                    l2_weight=l2_weight,
-                    activation_type=activation_type,
-                    certainty_variant=certainty_variant,
-                    model_variant=model_variant,
-                    logit_variant=logit_variant)
-
-def load_model(model,
-               FLAGS,
-               verbose=False
-              ):
-    
-    load = model.load_weights(FLAGS['model']['model_file']).expect_partial()
-    if verbose: logging.info(f'Loaded model...{FLAGS.model_file}')
-
-def save_model(model,
-               FLAGS,
-               verbose=False
-              ):
-    
-    model_dir = os.path.join(FLAGS['model']['output_dir'], 'model.ckpt-{}'.format(FLAGS.epochs))
-    if verbose: logging.info('Saving model to '+model_dir)
-    model.save_weights(model_dir)
-
-def configure_model(FLAGS):
-    callbacks = []
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(FLAGS['model']['output_dir'],'logs'))
-    
-    #filepath= os.path.join(FLAGS.output_dir,"weights-improvement-{epoch:03d}-{val_accuracy:.2f}.hdf5")
-    filepath = FLAGS.model_file
-    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath, 
-                                                                 monitor='val_probs_acc', 
-                                                                 verbose=1,
-                                                                 save_best_only=True,
-                                                                 save_weights_only=True,
-                                                                 mode='max')
-
-    earlystop_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=50)
-    
-    if FLAGS.save_checkpoints:
-        callbacks+=[checkpoint_callback]
-    if FLAGS.use_early_stopping:
-        callbacks+=[earlystop_callback]
-    if FLAGS.use_tensorboard:
-        callbacks+=[tensorboard_callback]
-
-    def pick_scheduler(lr):
-
-        if FLAGS.lr_scheduler == 'piecewise_linear':
-            boundaries = [32000, 48000]
-            values = [lr, lr/10, lr/100]
-            lr_scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
-        elif FLAGS.lr_scheduler == 'const':
-            lr_scheduler = lr
+                 **params):
+        super(resnet50,self).__init__()
+        
+        self.batch_size = batch_size
+        self.l2_weight = l2_weight
+        
+        if activation_type in ['sin','relu']:
+            self.activation_type = activation_type
         else:
-            raise ValueError(f'unknown lr_scheduler={FLAGS.lr_scheduler}')
+            raise ValueError(f'unknown activation_type={activation_type}')
+        
+        if certainty_variant in ['partial','total','normalized']:
+            self.certainty_variant = certainty_variant
+        else:
+            raise ValueError(f'unknown certainty_variant={certainty_variant}')
+        
+        if model_variant in ['1vsall','vanilla']:
+            self.model_variant = model_variant
+        else:
+            raise ValueError(f'unknown model_variant={model_variant}')
+                        
+        if logit_variant in ['affine','dm']:
+            self.logit_variant = logit_variant
+        else:
+            raise ValueError(f'unknown logit_variant={logit_variant}')
+        
+
+#         self.num_res_blocks = int((self.depth - 2) / 6)
+        self.num_res_blocks = [3,4,6,3]
+        num_filters = 64
+        
+        self.layer_init_1 = tf.keras.layers.InputLayer(input_shape=(224, 224, 3),
+                                                       batch_size=self.batch_size)
+
+        self.layer_init_2 = resnetLayer(num_filters=num_filters,
+                                        kernel_size=7,
+                                        strides=2,
+                                        l2_weight=self.l2_weight,
+                                        activation_type=self.activation_type)
+        
+        self.layer_init_3 = tf.keras.layers.MaxPooling2D(pool_size=3,strides=2)
+        
+        #self.res_blocks = [[0 for stack in range(4)] for res_block in range(max(self.num_res_blocks))]
+        self.res_blocks = [[0 for res_block in range(max(self.num_res_blocks))] for stack in range(4)]        
+
+        for stack in range(4):
+            for res_block in range(self.num_res_blocks[stack]):
+                self.res_blocks[stack][res_block] = resnet50Block(stack = stack,
+                                                                  res_block = res_block,
+                                                                  num_filters = num_filters,
+                                                                  activation_type = self.activation_type,
+                                                                  l2_weight = self.l2_weight)
+            num_filters *= 2  
             
-        return lr_scheduler
-    
-    def hp_params(hp):
-        lr = hp.Float('learning_rate',min_value=1e-3,max_value=1) #extracted from UDL2020-paper-040.pdf
-        eps = hp.Float('epsilon',min_value=1e-8,max_value=1e-5)
-        b1 = hp.Float('beta_1',min_value=0.85,max_value=0.99)
+        self.layer_final_1 = tf.keras.layers.AveragePooling2D(7)
+        self.layer_final_2 = tf.keras.layers.Flatten()
         
-        return lr,eps,b1
-    
-    if FLAGS.tune_hyperparams:
-        momentum = FLAGS.momentum
-        
-        if FLAGS.optimizer == 'sgd':
-            def optimizer_sgd_func(hp):
-                lr,_,_ = hp_params(hp)
-                return tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
-                                           momentum=momentum)
-            optimizer = optimizer_sgd_func
+        if self.logit_variant == 'dm':
+            self.layer_final_3 = DMLayer(units=1000)
+        elif self.logit_variant == 'affine':
+            self.layer_final_3 = tf.keras.layers.Dense(1000, kernel_initializer='he_normal')
+        else:
+            raise ValueError(f'unknown logit_variant={self.logit_variant}')   
             
-        elif FLAGS.optimizer == 'adam':
-            def optimizer_adam_func(hp):
-                lr,eps,b1 = hp_params(hp)           
-                return tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
-                                             epsilon=eps,
-                                             beta_1=b1) 
-            optimizer = optimizer_adam_func
+    def call(self, 
+             inputs: tf.Tensor, 
+             trainable: bool = False) -> dict:
+
+        x = self.layer_init_1(inputs)
+        x = self.layer_init_2(x)
+        x = self.layer_init_3(x)
+        
+        for stack in range(4):
+            for res_block in range(self.num_res_blocks[stack]):
+                x = self.res_blocks[stack][res_block](x)
+
+        x = self.layer_final_1(x)
+        x = self.layer_final_2(x)
+        
+        logits = self.layer_final_3(x)
+        
+        if self.model_variant == '1vsall':
+            probs = tf.math.sigmoid(logits)
+            if self.logit_variant == 'dm':
+                probs = 2*probs
+        elif self.model_variant == 'vanilla':
+            probs = tf.math.softmax(logits,axis=-1)
         else:
-            raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
-    else:
-        lr = FLAGS.learning_rate
-        eps = FLAGS.epsilon
-        b1 = FLAGS.beta_1
-        momentum = FLAGS.momentum
+            raise ValueError(f'unknown model_variant={self.model_variant}')
         
-        if FLAGS.optimizer == 'sgd':
-            optimizer = tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
-                                                momentum=momentum) 
-        elif FLAGS.optimizer == 'adam':
-            optimizer = tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
-                                                 epsilon=eps,
-                                                 beta_1=b1)    
-        else:
-            raise ValueError(f'unknown optimizer={FLAGS.optimizer}')        
+        certs = _calc_certs(probs, certainty_variant = self.certainty_variant)
+        logits_from_certs = _calc_logits_from_certs(certs = certs)
+        
+        return {'logits':logits,'probs':probs,'certs':certs,'logits_from_certs':logits_from_certs}
 
-         
-#     if FLAGS.optimizer == 'sgd':
-#         optimizer = optimizer_sgd_func if FLAGS.tune_hyperparams else optimizer_sgd
-#     elif FLAGS.optimizer == 'adam':
-#         optimizer = optimizer_adam_func if FLAGS.tune_hyperparams else optimizer_adam
-#     else:
-#         raise ValueError(f'unknown optimizer={FLAGS.optimizer}')
+    def train_step(self, data):
+        # Unpack the data. Its structure depends on your model and
+        # on what you pass to `fit()`.
+        x, y = data
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)  # Forward pass
+            # Compute the loss value
+            # (the loss function is configured in `compile()`)
+            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
 
-    def get_lr_metric(optimizer):
-        def lr(y_true, y_pred):
-            return optimizer._decayed_lr(tf.float32)
-        return lr
-
-    lr_metric = get_lr_metric(optimizer)
-
-    metrics_basic = {}
-    metrics_basic['logits'] = []
-    metrics_basic['probs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
-                              um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
-                              #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
-                              nll(name='nll'),
-                              BrierScore(name='brier')]
-    metrics_basic['certs'] = [tf.keras.metrics.SparseCategoricalAccuracy(name='acc'),
-                              um.ExpectedCalibrationError(num_bins=FLAGS.num_bins,name='ece'),
-                              #tf.keras.metrics.SparseCategoricalCrossentropy(from_logits=False,name='nll'),
-                              nll(name='nll'),
-                              BrierScore(name='brier')]
-    metrics_basic['logits_from_certs'] = []    
-
+        # Compute gradients
+        trainable_vars = self.trainable_variables
+        gradients = tape.gradient(loss, trainable_vars)
+        # Update weights
+        self.optimizer.apply_gradients(zip(gradients, trainable_vars))
+        # Update metrics (includes the metric that tracks the loss)
+        self.compiled_metrics.update_state(y, y_pred)
+        # Return a dict mapping metric names to current value
+        
+        #garbage collection
+        return {m.name: m.result() for m in self.metrics}    
     
-    if FLAGS.model_variant=='1vsall':
-        loss_funcs = {'logits':one_vs_all_loss_fn(from_logits=True),
-                  'probs':None,
-                  'certs':None,
-                  'logits_from_certs':None}
+class dummymodel(tf.keras.Model):
+    def __init__(self,
+                 batch_size:int = 128,
+                 **params):
+        super(dummymodel,self).__init__()
+        self.batch_size = batch_size
         
-        metrics = metrics_basic
-          
-    elif FLAGS.model_variant=='vanilla':        
-        loss_funcs = {'logits':tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                      'probs':None,
-                      'certs':None,
-                      'logits_from_certs':None}
+        self.layer_1 = tf.keras.layers.InputLayer(input_shape=(224, 224, 3),
+                                                       batch_size=self.batch_size)
+        self.layer_2 = tf.keras.layers.Flatten()
+        self.layer_3 = tf.keras.layers.Dense(1000, kernel_initializer='he_normal')
 
-        metrics = metrics_basic
-        
-    else:
-        raise ValueError(f'unknown model_variant={FLAGS.model_variant}')
-        
-    return callbacks, optimizer, loss_funcs, metrics
+    def call(self, 
+             inputs: tf.Tensor, 
+             trainable: bool = False) -> dict:
 
+        x = self.layer_1(inputs)
+        x = self.layer_2(x)
+        logits = self.layer_3(x)
+        
+        probs = tf.math.sigmoid(logits)
+        
+        return {'logits':logits,'probs':probs,'certs':probs,'logits_from_certs':logits}
+        
+        
+# def create_model(batch_size: int,
+#                  l2_weight: float = 0.0,
+#                  activation_type: str = 'relu', #relu or sine
+#                  certainty_variant: str = 'partial', # total, partial or normalized
+#                  model_variant: str = '1vsall', #1vsall or vanilla
+#                  logit_variant: str = 'affine', #affine or dm
+#                  **unused_kwargs: Dict[str, Any]) -> tf.keras.models.Model:
     
+#     return resnet20(batch_size=batch_size,
+#                     l2_weight=l2_weight,
+#                     activation_type=activation_type,
+#                     certainty_variant=certainty_variant,
+#                     model_variant=model_variant,
+#                     logit_variant=logit_variant)
+
+
 # based on um.numpy.plot_diagram, um.numpy.reliability_diagram
-def _extract_conf_acc(probs,labels,bins=0):
+def _extract_conf_acc(probs,labels,bins=0,one_hot=False):
 
     probs = np.array(probs)
     labels = np.array(labels)
-    labels_matrix = um.numpy.visualization.one_hot_encode(labels, probs.shape[1])
+    if not one_hot:
+        labels_matrix = um.numpy.visualization.one_hot_encode(labels, probs.shape[1])
+    else:
+        labels_matrix = labels
 
     # plot_diagram(probs.flatten(), labels_matrix.flatten(), y_axis))
 
@@ -573,6 +694,10 @@ def _extract_conf_acc(probs,labels,bins=0):
         return confidences[::delta],accuracies[::delta]
     else:
         return confidences, accuracies
+
+    
+    
+    
     
 # nonlinear calibration
 class calLayer(tf.keras.layers.Layer):
@@ -618,7 +743,8 @@ class calLayer(tf.keras.layers.Layer):
         inputs_r = tf.reshape(inputs,shape=(-1,1))
         self.beta = tf.nn.softmax(self.W1)
         #print(self.alphas)
-        x_alpha = tf.pow(inputs_r,self.alphas)
+        eps = 1e-10
+        x_alpha = tf.pow(inputs_r+eps,self.alphas)
         out = tf.reduce_sum(self.beta*x_alpha,axis=-1)
         
         return tf.reshape(out,shape=inputs_shape)
@@ -627,7 +753,9 @@ def _form_cal_dataset(uncal_model:tf.keras.Model,
                       output_name:str,
                       train_dataset,
                       dataset_bins:int,
-                      steps:int):
+                      steps:int,
+                      append_random:bool = False,
+                      random_frac:float = 0.1):
 
     cal_dataset = dict()
     #FLAGS = exp1.FLAGS
@@ -642,9 +770,49 @@ def _form_cal_dataset(uncal_model:tf.keras.Model,
         out = uncal_model(x)[output_name].numpy()
         labels = np.append(labels,y.numpy().astype('int32'))
         probs = out if type(probs)==type(None) else np.concatenate((probs,out))
+        
+    if append_random:
+        print(labels.shape,probs.shape)
+        
+        random_frac = random_frac
+        random_mean = 0.5
+        random_std = 0.33
+        batch_size = next(iter(train_dataset))[0].shape[0]
+        val_examples = steps*batch_size
+        random_size = int(val_examples*random_frac)
 
-    confidences, accuracies = _extract_conf_acc(probs=probs,labels=labels.astype('int32'),bins=dataset_bins)
-
+        #random_x = np.sqrt(random_std)*np.random.randn(random_size,32,32,3) + random_mean
+        random_x = np.random.rand(random_size,32,32,3)
+        random_probs = uncal_model(random_x)[output_name].numpy()
+        #random_labels_onehot = np.zeros(shape=(random_size,random_probs.shape[1]))
+        random_labels_onehot = np.ones(shape=(random_size,random_probs.shape[1]))
+        #random_labels_onehot = np.random.binomial(1,0.5,size=(random_size,random_probs.shape[1]))
+        #random_labels_onehot = np.ones(shape=(random_size,random_probs.shape[1]))
+        #random_labels_onehot = np.random.randint(low=0,high=2,size=(random_size,random_probs.shape[1])).astype('float32')
+        
+        labels_onehot = um.numpy.visualization.one_hot_encode(labels.astype('int32'), probs.shape[1])
+        
+#         print(labels_onehot.shape)
+#         print(random_labels_onehot.shape)
+#         print(labels_onehot.dtype)
+#         print(random_labels_onehot.dtype)
+#         print(random_labels_onehot2.dtype)
+#         print(random_labels_onehot[0])
+#         print(random_labels_onehot2[0])
+        labels_onehot = np.concatenate((labels_onehot,random_labels_onehot))
+        probs = np.concatenate((probs,random_probs))
+        print(labels_onehot.shape,probs.shape)
+        
+        confidences, accuracies = _extract_conf_acc(probs=probs,
+                                                    labels=labels_onehot,
+                                                    bins=dataset_bins,
+                                                    one_hot=True)
+        
+    else:
+        confidences, accuracies = _extract_conf_acc(probs=probs,
+                                                    labels=labels.astype('int32'),
+                                                    bins=dataset_bins,
+                                                    one_hot=False)
 
     cal_dataset['x'] = tf.convert_to_tensor(confidences,dtype=tf.float32)
     cal_dataset['y'] = tf.convert_to_tensor(accuracies,dtype=tf.float32)     

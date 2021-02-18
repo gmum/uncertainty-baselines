@@ -13,6 +13,5 @@ args = parser.parse_args()
 
 exp1 = experiment(exp_name='exp1',verbose=True,gpu_memory_fraction=args.gpu_memory_fraction)
 exp1.load_flags(path=args.config)
-
 exp1.prepare_exp()
 exp1.run_exp()

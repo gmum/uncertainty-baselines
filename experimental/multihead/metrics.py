@@ -13,33 +13,85 @@ import uncertainty_metrics as um
 
 import dataset_utils #from baselines/cifar
 
+import matplotlib.pyplot as plt
+
+
+
 def rel_diag(model,
              dataset,
-             FLAGS,
+             steps,
              output='certs',
              savefig=False,
              path='',
             ):
     
-    #number of classes
-    K = FLAGS.no_classes
-    
     labels = np.empty(0)
-    probs = np.empty((0,K))
+    probs = None
     
     for i,(x,y) in enumerate(dataset):
-        if i>FLAGS.steps_per_epoch: break
+        if i>steps: break
             
-        out = model(x)[output]
-
-        labels = np.append(labels,y.numpy().astype('int32'))
-        probs = np.concatenate((probs,out.numpy()))
+        out = model(x)[output].numpy()
+        y = y if type(y)== type(np.ndarray(shape=(0,))) else y.numpy()
+        
+        labels = np.append(labels,y.astype('int32'))
+        probs = out if type(probs)==type(None) else np.concatenate((probs,out)) 
     
     diagram = um.numpy.reliability_diagram(probs=probs,labels=labels.astype('int32'),img=False)
     if savefig:
         diagram.savefig(path)
- 
-      
+    return diagram
+
+
+def _extract_conf_acc_bins(probs,labels,bins=1):
+
+    probs = np.array(probs)
+    labels = np.array(labels)
+    labels = labels.astype('int32')
+    
+    labels_matrix = um.numpy.visualization.one_hot_encode(labels, probs.shape[1])
+
+    probs = probs.flatten()
+    labels = labels_matrix.flatten()
+    
+    bins_edges = np.linspace(0,1,bins+1)
+    probs_bins = np.digitize(probs,bins_edges)
+    bin_width = np.diff(bins_edges)[0]
+    
+    #confidences = []
+    accuracies = []    
+    confidences = (bins_edges[1:] + bins_edges[:-1]) / 2
+    
+    for i in range(bins):
+        accuracies.append(np.mean(labels[probs_bins==i+1]))
+        
+
+    return confidences, accuracies, bins_edges, bin_width
+
+
+def rel_diag_binned(model,dataset,steps,bins,output='certs',width_scale=0.95):
+    
+    labels = np.empty(0)
+    probs = None
+    
+    for i,(x,y) in enumerate(dataset):
+        if i>steps: break
+            
+        out = model(x)[output].numpy()
+        y = y if type(y)== type(np.ndarray(shape=(0,))) else y.numpy()
+        
+        labels = np.append(labels,y.astype('int32'))
+        probs = out if type(probs)==type(None) else np.concatenate((probs,out))     
+        
+    confidences, accuracies, bins_edges, bin_width = _extract_conf_acc_bins(probs,labels,bins=bins)
+    
+    fig = plt.figure()   
+    ax = fig.add_subplot()
+    ax.bar(confidences,accuracies,width=width_scale*bin_width,align='center')
+    
+    return fig
+
+
 def quartiles(data,**kwargs):
     q25 = list(np.percentile(data,25,**kwargs))
     q50 = list(np.percentile(data,50,**kwargs))

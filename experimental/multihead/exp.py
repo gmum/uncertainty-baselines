@@ -11,21 +11,31 @@ import kerastuner
 import uncertainty_baselines as ub
 import uncertainty_metrics as um
 
-from resnet20 import one_vs_all_loss_fn
-from resnet20 import create_model as resnet20
+from resnet import one_vs_all_loss_fn
+from resnet import resnet20
+from resnet import resnet50
+from resnet import dummymodel
+from resnet import nonlin_calibrator,_form_cal_dataset, cal_model
 
-from resnet20 import nonlin_calibrator,_form_cal_dataset, cal_model
+from resnet_alter import resnet50 as resnet50v2
 
 from metrics import nll
 from metrics import BrierScore
 
 
-from func import _load_datasets_basic, _load_datasets_corrupted, _load_datasets_OOD, _reconcile_flags_with_dataset
-
+from func import _load_datasets_cifar10_basic, _load_datasets_cifar10_corrupted, _load_datasets_OOD
+from func import _reconcile_flags_with_dataset, _augment_dataset
+from func import _load_datasets_imagenet_basic
+from func import ImageNetLearningRateSchedule, ImageNetWarmupDecaySchedule
+from func import FixedModelCheckpoint
+from func import update_dict
 
 class experiment:
     
-    def __init__(self,exp_name='exp',verbose=False,gpu_memory_fraction=0.31):
+    def __init__(self,
+                 exp_name='exp',
+                 verbose=False,
+                 gpu_memory_fraction=0.31):
         
         self.exp_name = exp_name
         self.verbose = verbose
@@ -35,14 +45,19 @@ class experiment:
         self.callbacks = dict()
         self.metrics = None
         self.loss = None
-        self.optimizer = None
+        self.optimizer = dict()
+        self.strategy = None
+        
         self.tuner = None
         
         self.datasets = dict()
+        self.cal_dataset = dict()
         self.data_builders = dict()
         
         self.dataset_loaded = False
         
+        self.initial_train_epoch = 0
+
         # set limits on gpu_memory
         config = tf.compat.v1.ConfigProto()
         gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=gpu_memory_fraction,
@@ -53,15 +68,13 @@ class experiment:
         sess = tf.compat.v1.Session(config=sess_config)
         tf.compat.v1.keras.backend.set_session(sess)  # set this TensorFlow session as the default session for Keras
         
-    def save_flags(self,path):
+    def save_flags(self,path=None):
         with open(path,'w') as fp:
             json.dump(self.FLAGS,fp,indent=4)
         
-    def load_flags(self,path=None,load_default=True):
+    def load_flags(self,path=None,overwrite_default=True):
         
-        if load_default:
-            with open('FLAGS.json','r') as fp:
-                FLAGS_default = json.load(fp)
+
         
         if path is None:
             self.FLAGS = AttrDict(FLAGS_default)
@@ -71,13 +84,30 @@ class experiment:
         with open(path,'r') as fp:
             FLAGS = json.load(fp)
 
-        if load_default:
-            for name,val in FLAGS_default.items():
-                if name in FLAGS.keys(): FLAGS_default[name] = FLAGS[name]
-        else:
-            FLAGS_default = FLAGS.copy()
+        if overwrite_default:
+            with open('FLAGS.json','r') as fp:
+                FLAGS_default = json.load(fp)
+            self.FLAGS = AttrDict(update_dict(FLAGS_default,FLAGS))
+#             for name,val in FLAGS_default.items():
                 
-        self.FLAGS = AttrDict(FLAGS_default)
+#                 if type(val)==type(dict()):
+#                     if name in FLAGS.keys(): 
+#                         print(f'FLAGS: dict key {name} does not exist, setting default')
+#                         FLAGS_default[name] = FLAGS[name]
+#                     else:
+                        
+#                     for subname,subval in val.items():
+#                         if subname in FLAGS[name].keys(): 
+#                             print(f'FLAGS:     subkey {subname} does not exist, ')
+                            
+#                             FLAGS_default[name] = FLAGS[name]
+#                 else:
+#                     if name in FLAGS.keys(): 
+#                         print(f'FLAGS: key {name} does not exist, setting default')
+#                         FLAGS_default[name] = FLAGS[name]
+        else:
+            self.FLAGS = AttrDict(FLAGS)
+   
 
     def load_data(self,overwrite=True):
         
@@ -87,16 +117,26 @@ class experiment:
             self.data_builders = dict()
             
         if self.FLAGS.dataset == 'cifar10':
-            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
+            dataset_builder = _load_datasets_cifar10_basic(self.FLAGS)
+            self.FLAGS = _reconcile_flags_with_dataset(dataset_builder,self.FLAGS)
+            
+            as_tuple = True
+            train_dataset = dataset_builder.build('train', as_tuple=as_tuple)
+            test_dataset = dataset_builder.build('test', as_tuple=as_tuple)
+            val_dataset = dataset_builder.build('validation', as_tuple=as_tuple)
+
+            if self.FLAGS['augment_train']:
+                train_dataset = _augment_dataset(self.FLAGS,train_dataset)            
+            
             self.datasets = {'cifar10': {'train': train_dataset,'val': val_dataset,'test': test_dataset}}
             self.data_builders = {'cifar10': dataset_builder}
-            self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10'],self.FLAGS)
+            
             
         elif self.FLAGS.dataset == 'cifar10-c':
             flags = self.FLAGS.copy()
             flags.dataset = 'cifar10'
-            dataset_builder,train_dataset,val_dataset,test_dataset = _load_datasets_basic(self.FLAGS)
-            _, test_datasets_corrupt = _load_datasets_corrupted(flags)
+            dataset_builder = _load_datasets_cifar10_basic(self.FLAGS)
+            _, test_datasets_corrupt = _load_datasets_cifar10_corrupted(flags)
             self.data_builders = {'cifar10-c': dataset_builder}
 
             for name in test_datasets_corrupt.keys():
@@ -105,19 +145,36 @@ class experiment:
                 
             self.FLAGS = _reconcile_flags_with_dataset(self.data_builders['cifar10-c'],self.FLAGS)
             
-        elif self.FLAGS.dataset == 'ood':
-            ood_datasets, ood_builders = _load_datasets_OOD(self.FLAGS)
-            self.data_builders = ood_builders
+#         elif self.FLAGS.dataset == 'ood':
+#             ood_datasets, ood_builders = _load_datasets_OOD(self.FLAGS)
+#             self.data_builders = ood_builders
 
-            for name in ood_datasets.keys():
-                if name not in self.datasets.keys(): self.datasets[name] = dict()
-                self.datasets[name]['test'] = ood_datasets[name]         
+#             for name in ood_datasets.keys():
+#                 if name not in self.datasets.keys(): self.datasets[name] = dict()
+#                 self.datasets[name]['test'] = ood_datasets[name]         
             
-            # TODO: reconcile FLAGS!
+        elif self.FLAGS.dataset == 'imagenet':
+            dataset_builder = _load_datasets_imagenet_basic(self.FLAGS)
+            self.FLAGS = _reconcile_flags_with_dataset(dataset_builder,self.FLAGS)
+            
+            as_tuple = True
+            train_dataset = dataset_builder.build('train', as_tuple=as_tuple)
+            test_dataset = dataset_builder.build('test', as_tuple=as_tuple)
+            val_dataset = dataset_builder.build('validation', as_tuple=as_tuple)
+
+            self.datasets = {'imagenet': {'train': train_dataset,'val': val_dataset,'test': test_dataset}}
+            self.data_builders = {'imagenet': dataset_builder}
             
         else:
             raise ValueError(f'unknown dataset={self.FLAGS.dataset}')
         self.dataset_loaded = True    
+        
+#     def distribute_data(self):
+#         if self.strategy.num_replicas_in_sync > 1:
+#             if self.verbose: print(f'Distributing data among...{self.strategy.num_replicas_in_sync} replicas')
+#             for name,dataset in self.datasets.items():
+#                 for sub_name, sub_dataset in dataset.items():    
+#                     self.datasets[name][sub_name] = self.strategy.experimental_distribute_dataset(sub_dataset)
         
     def set_output_dir(self):
         dirpath = self.FLAGS['exp']['output_dir']
@@ -125,30 +182,34 @@ class experiment:
         path = os.path.join(dirpath,'FLAGS.json')
         if not os.path.exists(path): self.save_flags(path=path)
 
-            
+    def set_strategy(self):
+        self.strategy = tf.distribute.MirroredStrategy()
             
     def load_model(self,path=None):
         if path is None: path = self.FLAGS['model']['model_file']
-        load = self.model.load_weights(path).expect_partial()
+            
+        if self.FLAGS['exp']['save_weights_only']:
+            load = self.model.load_weights(path).expect_partial()
+        else:
+            self.model = tf.keras.models.load_model(path)
+
         if self.verbose: print(f'Loaded model...{path}')
 
     def save_model(self,path=None):
-        if path is None:
-            #epochs = self.FLAGS['train_params']['epochs']
-            #path = os.path.join(self.FLAGS['exp']['output_dir'], f'model.ckpt-{epochs}')
-            path = os.path.join(self.FLAGS['exp']['output_dir'], f'model.ckpt')
-        
-#         if self.FLAGS['exp']['tune_hyperparams']:
-#             models = self.tuner.get_best_models(num_models=1)
-#             models[0].save_weights(path)
-#         else:
-        self.model.save_weights(path)
+        if path is None: path = self.FLAGS['model']['model_file']
+            
+        if self.FLAGS['exp']['save_weights_only']:
+            self.model.save_weights(path)
+        else:
+            self.model.save(path)
+
         if self.verbose: print(f'Saving model to {path}')
 
     def set_model(self,model_name=None):
         if model_name is None:
             model_name = self.FLAGS['model']['name']
         if self.verbose: print(f'Setting model...{model_name}')
+            
         if model_name == 'resnet20':
             self.model = resnet20(batch_size=self.FLAGS['train_params']['batch_size'],
                                  l2_weight=self.FLAGS['weight_decay'],
@@ -156,6 +217,19 @@ class experiment:
                                  certainty_variant=self.FLAGS['certainty_variant'],
                                  model_variant=self.FLAGS['model_variant'],
                                  logit_variant=self.FLAGS['logit_variant'])
+            
+        elif model_name == 'resnet50':
+            self.model = resnet50v2(batch_size=self.FLAGS['train_params']['batch_size'],
+                                    l2_weight=self.FLAGS['weight_decay'],
+                                    activation_type=self.FLAGS['activation'],
+                                    certainty_variant=self.FLAGS['certainty_variant'],
+                                    model_variant=self.FLAGS['model_variant'],
+                                    logit_variant=self.FLAGS['logit_variant'])
+#             self.model = resnet50v2()
+            
+        elif model_name == 'dummymodel':
+            self.model = dummymodel(batch_size=self.FLAGS['train_params']['batch_size'])
+            
         else:
             raise ValueError(f'unknown model_name={model_name}')
         
@@ -164,23 +238,31 @@ class experiment:
         np.random.seed(self.FLAGS['exp']['seed'])
         
     def set_callbacks(self):
+        use_tb = self.FLAGS['exp']['use_tensorboard']
+        use_cp = self.FLAGS['exp']['save_checkpoints']
+        use_es = self.FLAGS['exp']['use_early_stopping']
         if self.verbose: 
-            use_tb = self.FLAGS['exp']['use_tensorboard']
-            use_cp = self.FLAGS['exp']['save_checkpoints']
-            use_es = self.FLAGS['exp']['use_early_stopping']
             print(f'Setting train callbacks...TensorBoard={use_tb}')
             print(f'Setting train callbacks...ModelCheckpoint={use_cp}')
             print(f'Setting train callbacks...EarlyStopping={use_es}')
         if use_tb:
             self.callbacks['tensorboard'] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(self.FLAGS['exp']['output_dir'],'logs'))
     
+#         if use_cp:
+#             self.callbacks['checkpoint'] = tf.keras.callbacks.ModelCheckpoint(self.FLAGS['model']['model_file'], 
+#                                                                               monitor='val_probs_acc', 
+#                                                                               verbose=1,
+#                                                                               save_best_only=True,
+#                                                                               save_weights_only=True,
+#                                                                               mode='max')
         if use_cp:
-            self.callbacks['checkpoint'] = tf.keras.callbacks.ModelCheckpoint(self.FLAGS['model']['model_file'], 
-                                                                              monitor='val_probs_acc', 
-                                                                              verbose=1,
-                                                                              save_best_only=True,
-                                                                              save_weights_only=True,
-                                                                              mode='max')
+            #cpname = os.path.join(self.FLAGS['exp']['output_dir'],'cp','model-{epoch:04d}.ckpt')
+            cpname = os.path.join(self.FLAGS['exp']['output_dir'],'cp','model-{epoch:04d}')
+            self.callbacks['checkpoint'] = FixedModelCheckpoint(filepath=cpname,
+                                                                verbose=1,
+                                                                save_weights_only = self.FLAGS['exp']['save_weights_only'],
+                                                                save_freq='epoch')
+                                                                #save_freq=10)
         if use_es:
             self.callbacks['earlystop'] = tf.keras.callbacks.EarlyStopping(monitor='val_loss',
                                                                            mode='min',
@@ -238,9 +320,11 @@ class experiment:
 
         else:
             raise ValueError(f'unknown model_variant={self.FLAGS.model_variant}')
-    
+
+ 
     def set_optimizer(self):
         if self.verbose: print(f'Setting optimizer...')  
+            
         def pick_scheduler(lr):
             lrs = self.FLAGS['optimizer']['lr_scheduler']
             if lrs == 'piecewise_linear':
@@ -253,6 +337,18 @@ class experiment:
                 lr_scheduler = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
             elif lrs == 'const':
                 lr_scheduler = lr
+            elif lrs == 'imagenet_scheduler':
+                spe = self.FLAGS['train_params']['steps_per_epoch']
+                base_lr = lr * self.FLAGS['train_params']['batch_size'] / 256
+                _LR_SCHEDULE = [ (1.0, 5), (0.1, 30), (0.01, 60), (0.001, 80) ]
+                learning_rate = ImageNetLearningRateSchedule(steps_per_epoch = spe,
+                                                             minimum_learning_rate = base_lr/10,
+                                                             initial_learning_rate = base_lr,
+                                                             num_epochs = self.FLAGS['train_params']['epochs'],
+                                                             schedule = _LR_SCHEDULE)
+                warmup_steps = spe*5
+                lr_scheduler = ImageNetWarmupDecaySchedule(lr_schedule = learning_rate,
+                                                           warmup_steps = warmup_steps)
             else:
                 raise ValueError(f'unknown lr_scheduler={lrs}')
             return lr_scheduler
@@ -266,35 +362,39 @@ class experiment:
             return params
         
         nopt = self.FLAGS['optimizer']['name']
-        if self.FLAGS['exp']['tune_hyperparams']:
-            if nopt == 'sgd':
-                def optimizer_sgd_func(hp):
-                    params = hp_params(hp)
-                    return tf.keras.optimizers.SGD(learning_rate=pick_scheduler(params['learning_rate']),
-                                                   momentum=params['momentum'])
-                self.optimizer = optimizer_sgd_func
-
-            elif nopt == 'adam':
-                def optimizer_adam_func(hp):
-                    params = hp_params(hp)           
-                    return tf.keras.optimizers.Adam(learning_rate=pick_scheduler(params['learning_rate']),
-                                                 epsilon=params['epsilon'],
-                                                 beta_1=params['beta_1']) 
-                self.optimizer = optimizer_adam_func
-            else:
-                raise ValueError(f'unknown optimizer={self.FLAGS.optimizer}')
+        lr = self.FLAGS['optimizer']['learning_rate']
+        if nopt == 'sgd':
+            def optimizer_sgd_func(hp):
+                params = hp_params(hp)
+                return tf.keras.optimizers.SGD(learning_rate=pick_scheduler(params['learning_rate']),
+                                               momentum=params['momentum'])
+            self.optimizer['tuner'] = optimizer_sgd_func
+            self.optimizer['model'] = tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
+                                                     momentum=self.FLAGS['optimizer']['momentum']) 
+        elif nopt == 'nesterov':
+            def optimizer_sgd_func(hp):
+                params = hp_params(hp)
+                return tf.keras.optimizers.SGD(learning_rate=pick_scheduler(params['learning_rate']),
+                                               momentum=params['momentum'],
+                                               nesterov=True)
+            self.optimizer['tuner'] = optimizer_sgd_func
+            self.optimizer['model'] = tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
+                                                              momentum=self.FLAGS['optimizer']['momentum'],
+                                                              nesterov=True) 
+        elif nopt == 'adam':
+            def optimizer_adam_func(hp):
+                params = hp_params(hp)           
+                return tf.keras.optimizers.Adam(learning_rate=pick_scheduler(params['learning_rate']),
+                                                epsilon=params['epsilon'],
+                                                beta_1=params['beta_1']) 
+            self.optimizer['tuner'] = optimizer_adam_func
+            self.optimizer['model'] = tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
+                                                               epsilon=self.FLAGS['optimizer']['epsilon'],
+                                                               beta_1=self.FLAGS['optimizer']['beta_1'])    
         else:
-            lr = self.FLAGS['optimizer']['learning_rate']
-            if nopt == 'sgd':
-                self.optimizer = tf.keras.optimizers.SGD(learning_rate=pick_scheduler(lr),
-                                                    momentum=self.FLAGS['optimizer']['momentum']) 
-            elif nopt == 'adam':
-                self.optimizer = tf.keras.optimizers.Adam(learning_rate=pick_scheduler(lr),
-                                                     epsilon=self.FLAGS['optimizer']['epsilon'],
-                                                     beta_1=self.FLAGS['optimizer']['beta_1'])    
-            else:
-                raise ValueError(f'unknown optimizer={nopt}')                
-
+            raise ValueError(f'unknown optimizer={nopt}') 
+                  
+                
     def model_train(self,train_dataset=None,val_dataset=None):
         
         if train_dataset is None:
@@ -311,32 +411,48 @@ class experiment:
                                  validation_steps=self.FLAGS['train_params']['validation_steps'],
                                  validation_freq=self.FLAGS['train_params']['eval_frequency'],
                                  callbacks=self._get_callbacks(),
-                                 shuffle=False)                    
+                                 initial_epoch=self.initial_train_epoch,
+                                 shuffle='batch')                    
                 
     def model_compile(self):
-        if self.verbose: print(f'Compiling plain trainer...')          
-        self.model.compile(optimizer=self.optimizer,
-                           loss=self.loss,
-                           metrics=self.metrics)                
+        if self.verbose: print(f'Compiling plain trainer...')   
+
+            
+        self.model.compile(optimizer=self.optimizer['model'],
+                       loss=self.loss,
+                       metrics=self.metrics)                
                 
     def prepare_model(self):
+        
+#         with self.strategy.scope():
         self.set_model()  
         self.set_metrics()
         self.set_loss()
         self.set_optimizer()
         self.set_callbacks()
         self.model_compile()
+
+        
         if self.FLAGS['model']['pretrained']:
-            self.load_model()    
-      
+            checkpoint_dir = os.path.join(self.FLAGS['exp']['output_dir'],'cp')
+            mpath = self.FLAGS['model']['model_file']
+            
+            if self.FLAGS['exp']['save_weights_only']:
+                mpath += '.index'
+            
+            if os.path.exists(mpath):
+                self.load_model()
+                
+            elif os.path.exists(checkpoint_dir):
+                            latest = tf.train.latest_checkpoint(checkpoint_dir)
+                            self.initial_train_epoch = int(os.path.splitext(latest)[0].split('-')[1])                           
+                            self.load_model(path=latest)
 
     
     def tuner_compile(self):
         if self.verbose: print(f'Compiling kerastuner trainer...')          
         def tunable_model(hp):
-
-            optimizer = self.optimizer(hp) if self.FLAGS['exp']['tune_hyperparams'] else self.optimizer
-            self.model.compile(optimizer=optimizer,
+            self.model.compile(optimizer=self.optimizer['tuner'](hp),
                                loss=self.loss,
                                metrics=self._basic_metrics())
             return self.model  
@@ -363,8 +479,7 @@ class experiment:
                                                     project_name=self.FLAGS['tune']['subdir'])
 
     def prepare_tuner(self):
-        if self.FLAGS['exp']['tune_hyperparams']:
-            self.tuner_compile()
+        self.tuner_compile()
                 
     def model_tune(self):
         if self.verbose: print(f'Starting kerastuner training...')  
@@ -437,12 +552,6 @@ class experiment:
         else:
             return 0
 
-        
-#     def read_data(self,datasets,builders):
-#         self.datasets = datasets
-#         self.data_builders = builders
-#         self.FLAGS = _reconcile_flags_with_dataset(self.data_builders[self.FLAGS['train_dataset']],self.FLAGS)
-#         self.dataset_loaded = True
 
 
     def model_eval(self,datasets=None,save_results=False,postfix=''):
@@ -500,10 +609,9 @@ class experiment:
         if self.verbose: print(f'Preparing calibrator...')
         self.set_calibrator()  
         self.calibrator_compile()
-        if self.FLAGS['cal']['pretrained']:
-            self.load_calibrator()    
-
-
+        if self.FLAGS['cal']['pretrained'] and os.path.exists(self.FLAGS['cal']['model_file']+'.index'):
+            self.load_calibrator() 
+   
     def calibrator_train(self,cal_dataset=None):
         if cal_dataset is None:
             
@@ -511,7 +619,9 @@ class experiment:
                                      output_name=self.FLAGS['cal']['model_output'],
                                      train_dataset = self.datasets[self.FLAGS['cal']['train_dataset']]['val'],
                                      dataset_bins=self.FLAGS['cal']['dataset_bins'],
-                                     steps = self.FLAGS['train_params']['validation_steps'])
+                                     steps = self.FLAGS['train_params']['validation_steps'],
+                                     append_random = self.FLAGS['cal']['append_random_dataset'],
+                                     random_frac=self.FLAGS['cal']['random_fraction'])
             cal_dataset = self.cal_dataset
             
         if self.verbose: print(f'Starting plain calibration...')
@@ -526,6 +636,7 @@ class experiment:
          
     def prepare_cal_model(self):
         if self.verbose: print(f'Preparing cal_model...')
+#         with self.strategy.scope():
         self.cal_model = cal_model(uncal_model=self.model,
                                    calibrator=self.calibrator,
                                    output_name=self.FLAGS['cal']['model_output'])  
@@ -535,12 +646,16 @@ class experiment:
         
         self.set_seed()
         self.set_output_dir()
+        self.set_strategy()
         self.prepare_model()
-
-        self.prepare_tuner()
+        
+        if self.FLAGS['exp']['tune_hyperparams']:
+            self.prepare_tuner()
+        
         if self.FLAGS['exp']['load_data']: 
             if not self.dataset_loaded or reload_dataset:
                 self.load_data()
+#                 self.distribute_data()
                 
         self.prepare_calibrator()
         self.prepare_cal_model()

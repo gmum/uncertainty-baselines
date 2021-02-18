@@ -4,6 +4,7 @@
         "output_dir": "outdir",
         "load_data": true,
         "save_model": true,
+        "save_weights_only": true,
         "seed": 1337,
         "use_early_stopping": false,
         "save_checkpoints": false,
@@ -14,7 +15,7 @@
     "model": {
         "name": "resnet20",
         "pretrained": false,
-        "model_file": "outdir/model.ckpt"
+        "model_file": "outdir/model"
     },
     
     "activation": "relu",
@@ -67,10 +68,13 @@
         "model_file": "outdir/calibrator.ckpt",
         "model_output": "probs",
         "train_dataset": "cifar10",
+        "append_random_dataset": true,
+        "random_fraction": 0.1,
         "epochs": 20,
         "dataset_bins": 4000,
         "basis_type": "uniform",
         "basis_params": [-20,20,60],
         "train_basis": true
+        
     }
 }
