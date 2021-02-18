@@ -17,7 +17,7 @@ Results are saved to a ``csv`` file in ``slova`` dir.
 
 #### Plotting Figure 5
 * To readily plot part of Fig. 5 containing only our results (stored in ``metrics_summary``)
-> python plt_fig-shift.py --no_benchmark
+> python plot_fig-shift.py --no_benchmark
 
 * Complete Fig. 5 with benchmarks taken from ["Can You Trust Your Model’s Uncertainty? Evaluating
 Predictive Uncertainty Under Dataset Shift"](https://papers.nips.cc/paper/2019/file/8558cb408c1d76621371888657d2eb1d-Paper.pdf) 
