@@ -10,6 +10,10 @@ miniconda SLOVA env:
 
 Results are saved in dir ``slova``.
 #### Metric evaluation on CIFAR10-C
-After training, to evaluate usual metrics run
+After training, to evaluate on usual metrics
 > python comp-metrics.py --config slova/FLAGS.json --phase cal_eval
+
 Results are saved to a ``csv`` file in ``slova`` dir.
+
+#### Other models
+Other implemented models include OVA DM and softmax found in ``cfg`` dir.
