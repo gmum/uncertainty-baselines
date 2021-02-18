@@ -5,7 +5,7 @@ import numpy as np
 
 from exp import experiment
 
-parser = argparse.ArgumentParser(description='Multihead CIFAR-10 ResNet-20 experiment')
+parser = argparse.ArgumentParser(description='SLOVA CIFAR-10 ResNet-20 experiment')
 parser.add_argument("--config", type=str, help="config json file",default='FLAGS.json')
 parser.add_argument("--gpu_memory_fraction", type=float, help="gpu memory usage fraction",default=0.31)
 args = parser.parse_args()

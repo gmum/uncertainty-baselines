@@ -125,7 +125,7 @@ def cifar10c_shift_plot(df_dict_pivot,metric,model_list,ax):
     plt.setp(ax.get_legend().get_texts(), fontsize='14')
 
     
-def colorize(ax,colors):
+def colorize(ax,colors,highlight):
     no_methods = len(colors)
     box_size = 5 #each box consists of 5 Line2D's
     no_shifts = 6
@@ -147,7 +147,7 @@ def colorize(ax,colors):
             l.set_linewidth(3)
     
     #bold our model
-    our_method = 8
+    our_method = highlight
     for line in linegroups[:,our_method,:]:
         for color,l in zip(colors,line):
             l.set_linewidth(2)
@@ -191,7 +191,7 @@ def cifar10c_shift_plots(df_dict_pivot,metrics,model_list,figsize=(15,10)):
     for patch in axs[0].get_legend().get_patches():
         colors.append(patch._facecolor)
     colors[-1] = 'gold'
-    colorize(ax,colors)
+    colorize(ax,colors,highlight=len(colors)-1)
   
     ax.set_xlabel('')  
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))

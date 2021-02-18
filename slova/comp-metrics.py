@@ -6,7 +6,7 @@ import numpy as np
 
 from exp import experiment
 
-parser = argparse.ArgumentParser(description='Multihead CIFAR-10 ResNet-20 comp-metrics')
+parser = argparse.ArgumentParser(description='SLOVA CIFAR-10 ResNet-20 comp-metrics')
 parser.add_argument("--config", type=str, help="config json file",default='FLAGS.json')
 parser.add_argument("--phase", type=str,help="run evaluation on model: eval or cal_eval",default='eval')
 parser.add_argument("--dataset", type=str, help="dataset to compute metrics; cifar10; cifar10-c",default='cifar10-c')
